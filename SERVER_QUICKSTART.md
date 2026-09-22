@@ -14,36 +14,19 @@ The Patient encoder only needs `transformers>=4.51`; the GLM-4.7-Flash local tas
 path is pinned by this package to `transformers>=5.0.0` because GLM-4.7-Flash uses
 the `glm4_moe_lite` Transformers architecture.
 
-## 2. Prepare a medical dataset
+## 2. Prepare IMDb
 
-### Recommended first run: UCI Diabetes 130-US Hospitals
-
-Download and unzip the public UCI archive, then run:
+Download and extract the Stanford Large Movie Review Dataset (`aclImdb`), then run:
 
 ```bash
-prepare-diabetes130 \
-  --input /path/to/diabetic_data.csv \
-  --output data/diabetes130_readmission
+prepare-imdb \
+  --input /path/to/aclImdb \
+  --output data/imdb_sentiment
 ```
 
-Task: 30-day readmission, `<30` vs `>30/NO`. Splits are patient-disjoint by
-`patient_nbr`. The serialized patient text excludes encounter/patient IDs, the
-target, and `discharge_disposition_id`.
-
-Patient-MNGM uses only:
-
-```text
-data/diabetes130_readmission/train.csv.gz
-```
-
-### Optional later validation: MIMIC-IV-ED
-
-```bash
-prepare-mimic-ed \
-  --triage /path/to/mimic-iv-ed/triage.csv.gz \
-  --edstays /path/to/mimic-iv-ed/edstays.csv.gz \
-  --output data/mimic_ed_home_admitted
-```
+This keeps the official 25k test set untouched. The official 25k training reviews
+are split into train/graph/val. The prepared directory also contains `task.json`
+with the task instruction and label strings `NEGATIVE/POSITIVE`.
 
 ## 3. Prepare concept vocabulary
 
@@ -84,11 +67,11 @@ python scripts/build_concept_prototypes.py \
 
 ```bash
 python scripts/build_patient_matrices.py \
-  --train data/mimic_ed_home_admitted/train.csv.gz \
+  --train data/imdb_sentiment/train.csv.gz \
   --prototypes data/patient_mngm/concept_prototypes.npz \
   --model /models/Qwen3-Embedding-0.6B \
   --local-files-only \
-  --output data/patient_mngm/cache_smoke \
+  --output data/patient_mngm/imdb_cache_smoke \
   --dtype bfloat16 \
   --cache-dtype float16 \
   --batch-size 4 \
@@ -99,14 +82,14 @@ python scripts/build_patient_matrices.py \
 Inspect:
 
 ```bash
-python scripts/inspect_patient_cache.py data/patient_mngm/cache_smoke
+python scripts/inspect_patient_cache.py data/patient_mngm/imdb_cache_smoke
 ```
 
 ## 7. Smoke-test Patient-MNGM before loading the 30B task model
 
 ```bash
 python scripts/run_patient_mngm.py \
-  --cache data/patient_mngm/cache_smoke \
+  --cache data/patient_mngm/imdb_cache_smoke \
   --config configs/patient_mimic_glm_v0.3.json \
   --max-mngm-patients 32 \
   --output outputs/patient_mngm_smoke
@@ -147,9 +130,9 @@ Use small subsets first:
 
 ```bash
 python scripts/run_patient_graph_rl.py \
-  --patient-cache data/patient_mngm/cache_smoke \
+  --patient-cache data/patient_mngm/imdb_cache_smoke \
   --concepts data/concepts.json \
-  --data-dir data/diabetes130_readmission \
+  --data-dir data/imdb_sentiment \
   --config configs/patient_mimic_glm_v0.3.json \
   --task-model /models/GLM-4.7-Flash \
   --task-local-files-only \
