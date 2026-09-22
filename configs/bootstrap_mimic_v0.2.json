@@ -1,0 +1,38 @@
+{
+  "environment": {
+    "eta": 0.09531017980432493,
+    "lambda_min": 0.01,
+    "lambda_max": 4.0,
+    "adjacency_threshold": 1e-05,
+    "max_density": 1.0
+  },
+  "candidate": {
+    "max_frontier_edges": 256,
+    "min_frontier_edges": 32,
+    "frontier_min_score": 0.8,
+    "zero_tolerance": 1e-10
+  },
+  "grpo": {
+    "hidden_dim": 32,
+    "learning_rate": 0.003,
+    "update_epochs": 4,
+    "clip_epsilon": 0.2,
+    "kl_coef": 0.01,
+    "entropy_coef": 0.002,
+    "max_grad_norm": 1.0,
+    "min_group_std": 1e-08,
+    "reward_memory_decay": 0.8,
+    "edits_per_candidate": 32,
+    "selection_temperature": 1.0,
+    "direction_temperature": 1.0,
+    "device": "cpu"
+  },
+  "runner": {
+    "rounds": 4,
+    "num_candidates": 8,
+    "seed": 11,
+    "policy": "grpo",
+    "initial_lambda": 0.4,
+    "scalar_grid": [0.1, 0.2, 0.4, 0.6, 0.8]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "solver": {"max_iter": 3000, "rho": 1.0, "abs_tol": 1e-7, "rel_tol": 1e-6, "kkt_tol": 2e-5},
+  "mngm": {"max_iter": 12, "tol": 0.0001, "representation_penalty": 0.4, "covariance_ridge": 0.0001, "min_eig": 1e-6, "transform": "spearman_sine", "scale_constraint": "trace"},
+  "environment": {"eta": 0.5, "lambda_min": 0.01, "lambda_max": 4.0, "adjacency_threshold": 1e-5, "max_density": 1.0},
+  "downstream": {"C": 1.0, "max_iter": 1000, "tol": 1e-8},
+  "reward": {"alpha": 0.02, "beta": 0.01, "density_mode": "increase_only", "invalid_reward": -1.0},
+  "acceptance": {"reward_threshold": 0.0, "min_task_improvement": 1e-8},
+  "data": {"seed": 7, "n_train": 600, "n_reward": 300, "n_test": 300, "p": 10, "nonparanormal": true, "covariance_ridge": 0.0001},
+  "grpo": {"hidden_dim": 32, "learning_rate": 0.003, "update_epochs": 4, "clip_epsilon": 0.2, "kl_coef": 0.01, "entropy_coef": 0.002, "max_grad_norm": 1.0, "min_group_std": 1e-8, "reward_memory_decay": 0.8, "device": "cpu"},
+  "runner": {"rounds": 8, "num_candidates": 12, "seed": 11, "policy": "greedy", "initial_lambda": 0.4, "scalar_grid": [0.1, 0.2, 0.4, 0.6, 0.8]}
+}
