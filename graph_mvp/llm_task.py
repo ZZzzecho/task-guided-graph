@@ -1,4 +1,4 @@
-"""Generic graph-conditioned causal-LM task adapter for HOME vs ADMITTED.
+"""Generic graph-conditioned causal-LM adapter for binary text classification.
 
 This module deliberately avoids importing transformers/peft.  Pass any causal LM
 that supports `get_input_embeddings()` and `forward(inputs_embeds=..., ...)`,
@@ -14,7 +14,9 @@ from .downstream import TaskMetrics, EvaluationResult, EvaluationError
 from .graph_tokens import error_weighted_edge_relevance
 
 
-LABEL_TEXT = {0: "HOME", 1: "ADMITTED"}
+LABEL_TEXT = {0: "HOME", 1: "ADMITTED"}  # backward-compatible default
+DEFAULT_LABEL_TEXTS = ("HOME", "ADMITTED")
+DEFAULT_ANSWER_PREFIX = "\n\nDisposition:"
 DEFAULT_INSTRUCTION = (
     "Predict the emergency-department disposition using only the triage information. "
     "Answer exactly HOME or ADMITTED.\n\n"
@@ -38,6 +40,8 @@ class CausalTaskContext:
     batch_size: int = 8
     max_length: int = 512
     instruction: str = DEFAULT_INSTRUCTION
+    label_texts: tuple[str, str] = DEFAULT_LABEL_TEXTS
+    answer_prefix: str = DEFAULT_ANSWER_PREFIX
 
     def __post_init__(self):
         ids = tuple(self.concept_ids)
@@ -47,11 +51,17 @@ class CausalTaskContext:
             raise ValueError("concept_ids must be unique")
         if not texts or len(texts) != len(labels) or any(y not in (0, 1) for y in labels):
             raise ValueError("texts/labels must form a nonempty binary task")
+        label_texts = tuple(str(x).strip() for x in self.label_texts)
+        if len(label_texts) != 2 or any(not x for x in label_texts) or label_texts[0] == label_texts[1]:
+            raise ValueError("label_texts must contain two distinct nonempty strings")
+        if not str(self.answer_prefix):
+            raise ValueError("answer_prefix must be nonempty")
         if self.batch_size < 1 or self.max_length < 8:
             raise ValueError("invalid batch_size/max_length")
         object.__setattr__(self, "concept_ids", ids)
         object.__setattr__(self, "texts", texts)
         object.__setattr__(self, "labels", labels)
+        object.__setattr__(self, "label_texts", label_texts)
 
     def batches(self, device):
         for start in range(0, len(self.texts), self.batch_size):
@@ -60,6 +70,8 @@ class CausalTaskContext:
                 self.texts[start:start + self.batch_size],
                 self.labels[start:start + self.batch_size],
                 instruction=self.instruction,
+                label_texts=self.label_texts,
+                answer_prefix=self.answer_prefix,
                 max_length=self.max_length,
                 device=device,
             )
@@ -74,6 +86,8 @@ def _encode_ids(tokenizer, text, add_special_tokens):
 
 
 def encode_binary_batch(tokenizer, texts, labels, *, instruction=DEFAULT_INSTRUCTION,
+                        label_texts=DEFAULT_LABEL_TEXTS,
+                        answer_prefix=DEFAULT_ANSWER_PREFIX,
                         max_length=512, device="cpu"):
     """Create causal-LM labels with prompt tokens masked by -100."""
     torch = _torch()
@@ -87,8 +101,8 @@ def encode_binary_batch(tokenizer, texts, labels, *, instruction=DEFAULT_INSTRUC
     for text, label in zip(texts, labels):
         prefix_ids = _encode_ids(tokenizer, instruction, add_special_tokens=True)
         patient_ids = _encode_ids(tokenizer, str(text).rstrip(), add_special_tokens=False)
-        suffix_ids = _encode_ids(tokenizer, "\n\nDisposition:", add_special_tokens=False)
-        answer_ids = _encode_ids(tokenizer, " " + LABEL_TEXT[int(label)], add_special_tokens=False)
+        suffix_ids = _encode_ids(tokenizer, answer_prefix, add_special_tokens=False)
+        answer_ids = _encode_ids(tokenizer, " " + label_texts[int(label)], add_special_tokens=False)
         if eos is not None:
             answer_ids = answer_ids + [eos]
         if not answer_ids:
@@ -208,7 +222,7 @@ except RuntimeError:  # pragma: no cover
 
 
 class FrozenGraphCausalEvaluator:
-    """Dense binary reward from normalized HOME/ADMITTED label likelihoods.
+    """Dense binary reward from normalized label-string likelihoods.
 
     For every patient we score both label strings under the same frozen model and
     graph, then normalize the two sequence log-likelihoods with log-softmax.  The
@@ -224,7 +238,7 @@ class FrozenGraphCausalEvaluator:
         from sklearn.metrics import (roc_auc_score, average_precision_score,
                                      accuracy_score, f1_score)
         self.model.eval()
-        gold_logps, admitted_probs, activations = [], [], []
+        gold_logps, positive_probs, activations = [], [], []
         try:
             device = self.model.device
         except AttributeError:
@@ -237,7 +251,10 @@ class FrozenGraphCausalEvaluator:
                 pair_labels = tuple(label for _ in texts for label in (0, 1))
                 batch = encode_binary_batch(
                     context.tokenizer, pair_texts, pair_labels,
-                    instruction=context.instruction, max_length=context.max_length,
+                    instruction=context.instruction,
+                    label_texts=context.label_texts,
+                    answer_prefix=context.answer_prefix,
+                    max_length=context.max_length,
                     device=device)
                 output, labels, aux = self.model(
                     global_graph=snapshot.Rho,
@@ -252,13 +269,13 @@ class FrozenGraphCausalEvaluator:
                 gold_index = torch.as_tensor(gold, dtype=torch.long, device=device)
                 selected = normalized.gather(1, gold_index[:, None]).squeeze(1)
                 gold_logps.extend(selected.detach().cpu().tolist())
-                admitted_probs.extend(torch.exp(normalized[:, 1]).detach().cpu().tolist())
+                positive_probs.extend(torch.exp(normalized[:, 1]).detach().cpu().tolist())
                 if return_activation:
                     # The two candidate labels have identical patient activation masks.
                     pair_a = aux["activations"].reshape(len(texts), 2, -1)
                     activations.append(pair_a[:, 0].detach().cpu().numpy())
         arr = np.asarray(gold_logps, dtype=float)
-        prob = np.asarray(admitted_probs, dtype=float)
+        prob = np.asarray(positive_probs, dtype=float)
         y = np.asarray(context.labels, dtype=int)
         if len(arr) != len(context.texts):
             raise EvaluationError("Evaluation did not return one score per example")
