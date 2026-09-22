@@ -14,7 +14,29 @@ The Patient encoder only needs `transformers>=4.51`; the GLM-4.7-Flash local tas
 path is pinned by this package to `transformers>=5.0.0` because GLM-4.7-Flash uses
 the `glm4_moe_lite` Transformers architecture.
 
-## 2. Prepare MIMIC-IV-ED
+## 2. Prepare a medical dataset
+
+### Recommended first run: UCI Diabetes 130-US Hospitals
+
+Download and unzip the public UCI archive, then run:
+
+```bash
+prepare-diabetes130 \
+  --input /path/to/diabetic_data.csv \
+  --output data/diabetes130_readmission
+```
+
+Task: 30-day readmission, `<30` vs `>30/NO`. Splits are patient-disjoint by
+`patient_nbr`. The serialized patient text excludes encounter/patient IDs, the
+target, and `discharge_disposition_id`.
+
+Patient-MNGM uses only:
+
+```text
+data/diabetes130_readmission/train.csv.gz
+```
+
+### Optional later validation: MIMIC-IV-ED
 
 ```bash
 prepare-mimic-ed \
@@ -22,8 +44,6 @@ prepare-mimic-ed \
   --edstays /path/to/mimic-iv-ed/edstays.csv.gz \
   --output data/mimic_ed_home_admitted
 ```
-
-Patient-MNGM will use **only** `data/mimic_ed_home_admitted/train.csv.gz`.
 
 ## 3. Prepare concept vocabulary
 
@@ -129,7 +149,7 @@ Use small subsets first:
 python scripts/run_patient_graph_rl.py \
   --patient-cache data/patient_mngm/cache_smoke \
   --concepts data/concepts.json \
-  --mimic-dir data/mimic_ed_home_admitted \
+  --data-dir data/diabetes130_readmission \
   --config configs/patient_mimic_glm_v0.3.json \
   --task-model /models/GLM-4.7-Flash \
   --task-local-files-only \
