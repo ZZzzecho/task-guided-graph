@@ -1,0 +1,6 @@
+name: graph_rl
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+prefix: /laijizheng/miniconda3/envs/graph_rl
