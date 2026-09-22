@@ -10,8 +10,8 @@ from graph_mvp.patient_repr import (
 
 
 def main():
-    p = argparse.ArgumentParser(description="Build frozen Patient-MNGM H_d cache from MIMIC D_train")
-    p.add_argument("--train", type=Path, required=True, help="Prepared MIMIC train.csv or train.csv.gz")
+    p = argparse.ArgumentParser(description="Build frozen Patient-MNGM H_d cache from prepared D_train")
+    p.add_argument("--train", type=Path, required=True, help="Prepared train.csv or train.csv.gz containing a text column")
     p.add_argument("--prototypes", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--model", default=DEFAULT_PATIENT_ENCODER)
