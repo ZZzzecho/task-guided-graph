@@ -39,7 +39,7 @@ def _pd():
     return pd
 
 
-def _context(frame, concept_ids, tokenizer, batch_size, max_length):
+def _context(frame, concept_ids, tokenizer, batch_size, max_length, task):
     return CausalTaskContext(
         concept_ids=tuple(concept_ids),
         texts=tuple(frame["text"].astype(str).tolist()),
@@ -47,6 +47,9 @@ def _context(frame, concept_ids, tokenizer, batch_size, max_length):
         tokenizer=tokenizer,
         batch_size=batch_size,
         max_length=max_length,
+        instruction=task["instruction"],
+        label_texts=tuple(task["label_texts"]),
+        answer_prefix=task["answer_prefix"],
     )
 
 
@@ -98,6 +101,21 @@ def main():
 
     if args.task_lr <= 0 or args.warmup_steps < 0 or args.adapt_steps < 1:
         raise SystemExit("Invalid task training hyperparameters")
+    data_dir = args.data_dir or args.mimic_dir
+    if data_dir is None:
+        raise SystemExit("Provide --data-dir (preferred) or legacy --mimic-dir")
+    task_path = data_dir / "task.json"
+    if task_path.exists():
+        task = json.loads(task_path.read_text(encoding="utf-8"))
+    else:
+        task = {
+            "instruction": (
+                "Predict the emergency-department disposition using only the triage information. "
+                "Answer exactly HOME or ADMITTED.\n\n"
+            ),
+            "label_texts": ["HOME", "ADMITTED"],
+            "answer_prefix": "\n\nDisposition:",
+        }
     cfg = Config.load(args.config)
     vocab = load_concept_vocabulary(args.concepts)
     cache = PatientMatrixDataset(args.patient_cache)
@@ -134,11 +152,11 @@ def main():
     graph_df = _limit(pd.read_csv(data_dir / "graph.csv.gz"), args.max_reward_examples)
     val_df = _limit(pd.read_csv(data_dir / "val.csv.gz"), args.max_val_examples)
     train_ctx = _context(train_df, cache.concept_ids, task_tokenizer,
-                         args.task_batch_size, args.task_max_length)
+                         args.task_batch_size, args.task_max_length, task)
     graph_ctx = _context(graph_df, cache.concept_ids, task_tokenizer,
-                         args.task_batch_size, args.task_max_length)
+                         args.task_batch_size, args.task_max_length, task)
     val_ctx = _context(val_df, cache.concept_ids, task_tokenizer,
-                       args.task_batch_size, args.task_max_length)
+                       args.task_batch_size, args.task_max_length, task)
 
     import torch
     trainable = [p for p in model.parameters() if p.requires_grad]
@@ -203,6 +221,7 @@ def main():
         "patient_cache_fingerprint": cache.fingerprint(),
         "mngm_shape": list(patient_matrices.shape),
         "task_model": args.task_model,
+        "task_definition": task,
         "task_activation_prototype_space": "task_lm_input_embeddings",
         "patient_mngm_prototype_space": "Qwen3-Embedding pooled",
         "warmup": warmup,
