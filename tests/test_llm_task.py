@@ -19,7 +19,7 @@ class TinyTokenizer:
 
 def test_binary_batch_masks_gold_answer_from_activation():
     torch = pytest.importorskip("torch")
-    batch = encode_binary_batch(TinyTokenizer(), ["pain"], [1], max_length=220)
+    batch = encode_binary_batch(TinyTokenizer(), ["pain"], [1], label_texts=("NEGATIVE", "POSITIVE"), answer_prefix="\n\nSentiment:", max_length=220)
     assert batch["input_ids"].shape == batch["labels"].shape
     answer = batch["labels"] != -100
     assert answer.any()
@@ -61,3 +61,18 @@ def test_graph_conditioned_causal_evaluator_runs(state):
     relevance = evaluator.task_relevance(state.snapshot, ctx)
     assert relevance.shape == (3, 3)
     assert torch.isfinite(torch.tensor(metrics.task_loss))
+
+
+def test_context_accepts_generic_binary_labels():
+    ctx = CausalTaskContext(
+        ("c1", "c2"),
+        ("A wonderful film.", "A terrible film."),
+        (1, 0),
+        TinyTokenizer(),
+        instruction="Classify sentiment. Answer exactly NEGATIVE or POSITIVE.\n\n",
+        label_texts=("NEGATIVE", "POSITIVE"),
+        answer_prefix="\n\nSentiment:",
+        max_length=220,
+    )
+    assert ctx.label_texts == ("NEGATIVE", "POSITIVE")
+    assert ctx.answer_prefix.endswith("Sentiment:")
