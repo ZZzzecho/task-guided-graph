@@ -21,6 +21,7 @@ all = ["pytest>=7", "torch>=2.0", "pandas>=2.0", "transformers>=5.0.0", "peft>=0
 graph-mvp = "graph_mvp.cli:main"
 prepare-qsar = "graph_mvp.qsar_cli:main"
 prepare-mimic-ed = "graph_mvp.mimic_cli:main"
+prepare-diabetes130 = "graph_mvp.diabetes130_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["graph_mvp*"]
