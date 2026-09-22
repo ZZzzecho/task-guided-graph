@@ -2,7 +2,7 @@
 """End-to-end Patient-MNGM + task-guided graph RL entrypoint.
 
 Requires:
-- prepared MIMIC-IV-ED split directory from `prepare-mimic-ed`;
+- prepared split directory with train/graph/val/test CSV.GZ files;
 - frozen Patient-MNGM cache built only from train.csv.gz;
 - concept vocabulary used by that cache;
 - a local Transformers causal LM (default GLM-4.7-Flash).
@@ -71,7 +71,7 @@ def main():
     p = argparse.ArgumentParser(description="Patient-MNGM + GLM task-guided Graph RL")
     p.add_argument("--patient-cache", type=Path, required=True)
     p.add_argument("--concepts", type=Path, required=True)
-    p.add_argument("--mimic-dir", type=Path, required=True)
+    p.add_argument("--data-dir", type=Path, required=False, help="Prepared split directory (train/graph/val/test.csv.gz)")\n    p.add_argument("--mimic-dir", type=Path, required=False, help="Deprecated alias for --data-dir")
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--max-mngm-patients", type=int, default=None)
@@ -130,9 +130,9 @@ def main():
     model = GraphConditionedCausalLM(task_lm, graph_tokenizer)
 
     pd = _pd()
-    train_df = _limit(pd.read_csv(args.mimic_dir / "train.csv.gz"), args.max_train_examples)
-    graph_df = _limit(pd.read_csv(args.mimic_dir / "graph.csv.gz"), args.max_reward_examples)
-    val_df = _limit(pd.read_csv(args.mimic_dir / "val.csv.gz"), args.max_val_examples)
+    train_df = _limit(pd.read_csv(data_dir / "train.csv.gz"), args.max_train_examples)
+    graph_df = _limit(pd.read_csv(data_dir / "graph.csv.gz"), args.max_reward_examples)
+    val_df = _limit(pd.read_csv(data_dir / "val.csv.gz"), args.max_val_examples)
     train_ctx = _context(train_df, cache.concept_ids, task_tokenizer,
                          args.task_batch_size, args.task_max_length)
     graph_ctx = _context(graph_df, cache.concept_ids, task_tokenizer,
@@ -199,7 +199,7 @@ def main():
 
     final_val = evaluator.evaluate_snapshot(result.final_state.snapshot, val_ctx)
     summary = {
-        "patient_cache": str(args.patient_cache),
+        "patient_cache": str(args.patient_cache),\n        "data_dir": str(data_dir),
         "patient_cache_fingerprint": cache.fingerprint(),
         "mngm_shape": list(patient_matrices.shape),
         "task_model": args.task_model,
