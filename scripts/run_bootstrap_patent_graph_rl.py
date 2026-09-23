@@ -16,6 +16,7 @@ from graph_mvp.bootstrap import (
     make_shuffled_versions_frame,
     project_concept_matrix,
     save_bootstrap_bundle,
+    load_bootstrap_bundle,
     train_bootstrap_version,
 )
 from graph_mvp.config import Config
@@ -78,6 +79,12 @@ def main():
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
 
+    p.add_argument(
+        "--bootstrap-bundle",
+        type=Path,
+        default=None,
+        help="Reuse an existing fixed bootstrap_bundle.npz and skip representation generation.",
+    )
     p.add_argument("--bootstrap-model", default=GLM47_FLASH_MODEL_ID)
     p.add_argument("--bootstrap-local-files-only", action="store_true")
     p.add_argument("--bootstrap-dtype", default="bfloat16",
@@ -134,104 +141,115 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # Stage A: bootstrap representation generation.
+    # Stage A: bootstrap representation generation or fixed-bundle reuse.
     # ------------------------------------------------------------------
-    print("Loading bootstrap representation model...", flush=True)
-    bootstrap_lm, bootstrap_tokenizer = load_local_causal_lm(
-        args.bootstrap_model,
-        dtype=args.bootstrap_dtype,
-        device_map=args.bootstrap_device_map,
-        local_files_only=args.bootstrap_local_files_only,
-    )
-    bootstrap_lm, embed_target = attach_bootstrap_embedding_lora(
-        bootstrap_lm,
-        r=args.bootstrap_lora_r,
-        alpha=args.bootstrap_lora_alpha,
-        dropout=args.bootstrap_lora_dropout,
-    )
-
-    import torch
-    trainable = [p for p in bootstrap_lm.parameters() if p.requires_grad]
-    if not trainable:
-        raise SystemExit("bootstrap embedding LoRA exposed no trainable parameters")
-    bootstrap_optimizer = torch.optim.AdamW(trainable, lr=args.bootstrap_lr)
-
-    frame = _load_bootstrap_frame(args.data_dir, args.bootstrap_docs)
-    versions = make_shuffled_versions_frame(
-        frame,
-        text_col="text",
-        n_versions=args.bootstrap_versions,
-        seed=args.bootstrap_seed,
-    )
-
-    # Fit the dimension-reduction basis once, before any bootstrap training.
-    reference_h = extract_concept_embedding_matrix(
-        bootstrap_lm, bootstrap_tokenizer, vocab.concept_texts
-    )
-    pca_mean, pca_components = fixed_pca_projection(
-        reference_h,
-        output_dim=args.bootstrap_representation_dim,
-        seed=args.bootstrap_seed,
-    )
-    np.savez_compressed(
-        args.output / "bootstrap_projection.npz",
-        mean=pca_mean,
-        components=pca_components,
-    )
-
-    snapshots = []
     bootstrap_training = []
-    for b, texts in enumerate(versions):
-        stats = train_bootstrap_version(
-            bootstrap_lm,
-            bootstrap_tokenizer,
-            texts,
-            bootstrap_optimizer,
-            steps=args.bootstrap_steps_per_version,
-            batch_size=args.bootstrap_batch_size,
-            max_length=args.bootstrap_max_length,
-            max_grad_norm=cfg.grpo.max_grad_norm,
-        )
-        h_full = extract_concept_embedding_matrix(
-            bootstrap_lm, bootstrap_tokenizer, vocab.concept_texts
-        )
-        h = project_concept_matrix(
-            h_full, pca_mean, pca_components, normalize=True
-        )
-        snapshots.append(h)
-        bootstrap_training.append(stats)
+    embed_target = None
+    if args.bootstrap_bundle is not None:
+        H, bootstrap_meta = load_bootstrap_bundle(args.bootstrap_bundle)
+        if tuple(bootstrap_meta["concept_ids"]) != tuple(vocab.concept_ids):
+            raise SystemExit("--bootstrap-bundle concept axis does not match --concepts")
+        bundle_path = args.bootstrap_bundle
         print(
-            f"bootstrap version {b + 1}/{len(versions)} "
-            f"loss={stats['final_loss']:.6f} H={list(h.shape)}",
+            f"Reusing fixed bootstrap bundle {list(H.shape)} <- {bundle_path}",
             flush=True,
         )
+    else:
+        print("Loading bootstrap representation model...", flush=True)
+        bootstrap_lm, bootstrap_tokenizer = load_local_causal_lm(
+            args.bootstrap_model,
+            dtype=args.bootstrap_dtype,
+            device_map=args.bootstrap_device_map,
+            local_files_only=args.bootstrap_local_files_only,
+        )
+        bootstrap_lm, embed_target = attach_bootstrap_embedding_lora(
+            bootstrap_lm,
+            r=args.bootstrap_lora_r,
+            alpha=args.bootstrap_lora_alpha,
+            dropout=args.bootstrap_lora_dropout,
+        )
 
-    H = np.stack(snapshots, axis=0).astype(np.float32)
-    bundle_path = args.output / "bootstrap_bundle.npz"
-    save_bootstrap_bundle(
-        bundle_path,
-        H,
-        vocab.concept_ids,
-        model_id=args.bootstrap_model,
-        adapter_id=f"embedding-lora:{embed_target}",
-        version_ids=tuple(f"version-{i + 1:02d}" for i in range(len(H))),
-        metadata={
-            "sentence_order_perturbation": True,
-            "continuous_lora_trajectory": True,
-            "representation_projection": "fixed_pretraining_PCA",
-            "representation_dim": int(args.bootstrap_representation_dim),
-            "bootstrap_docs": int(len(frame)),
-            "steps_per_version": int(args.bootstrap_steps_per_version),
-        },
-    )
-    print(f"Saved fixed bootstrap bundle {list(H.shape)} -> {bundle_path}", flush=True)
+        import torch
+        trainable = [p for p in bootstrap_lm.parameters() if p.requires_grad]
+        if not trainable:
+            raise SystemExit("bootstrap embedding LoRA exposed no trainable parameters")
+        bootstrap_optimizer = torch.optim.AdamW(trainable, lr=args.bootstrap_lr)
 
-    # Bootstrap evidence is now permanently frozen. Free this model before loading
-    # the independent downstream task adapter/model.
-    del bootstrap_optimizer, bootstrap_lm
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        frame = _load_bootstrap_frame(args.data_dir, args.bootstrap_docs)
+        versions = make_shuffled_versions_frame(
+            frame,
+            text_col="text",
+            n_versions=args.bootstrap_versions,
+            seed=args.bootstrap_seed,
+        )
+
+        # Fit the dimension-reduction basis once, before any bootstrap training.
+        reference_h = extract_concept_embedding_matrix(
+            bootstrap_lm, bootstrap_tokenizer, vocab.concept_texts
+        )
+        pca_mean, pca_components = fixed_pca_projection(
+            reference_h,
+            output_dim=args.bootstrap_representation_dim,
+            seed=args.bootstrap_seed,
+        )
+        np.savez_compressed(
+            args.output / "bootstrap_projection.npz",
+            mean=pca_mean,
+            components=pca_components,
+        )
+
+        snapshots = []
+        for b, texts in enumerate(versions):
+            stats = train_bootstrap_version(
+                bootstrap_lm,
+                bootstrap_tokenizer,
+                texts,
+                bootstrap_optimizer,
+                steps=args.bootstrap_steps_per_version,
+                batch_size=args.bootstrap_batch_size,
+                max_length=args.bootstrap_max_length,
+                max_grad_norm=cfg.grpo.max_grad_norm,
+            )
+            h_full = extract_concept_embedding_matrix(
+                bootstrap_lm, bootstrap_tokenizer, vocab.concept_texts
+            )
+            h = project_concept_matrix(
+                h_full, pca_mean, pca_components, normalize=True
+            )
+            snapshots.append(h)
+            bootstrap_training.append(stats)
+            print(
+                f"bootstrap version {b + 1}/{len(versions)} "
+                f"loss={stats['final_loss']:.6f} H={list(h.shape)}",
+                flush=True,
+            )
+
+        H = np.stack(snapshots, axis=0).astype(np.float32)
+        bundle_path = args.output / "bootstrap_bundle.npz"
+        save_bootstrap_bundle(
+            bundle_path,
+            H,
+            vocab.concept_ids,
+            model_id=args.bootstrap_model,
+            adapter_id=f"embedding-lora:{embed_target}",
+            version_ids=tuple(f"version-{i + 1:02d}" for i in range(len(H))),
+            metadata={
+                "sentence_order_perturbation": True,
+                "continuous_lora_trajectory": True,
+                "representation_projection": "fixed_pretraining_PCA",
+                "representation_dim": int(args.bootstrap_representation_dim),
+                "bootstrap_docs": int(len(frame)),
+                "steps_per_version": int(args.bootstrap_steps_per_version),
+            },
+        )
+        print(f"Saved fixed bootstrap bundle {list(H.shape)} -> {bundle_path}", flush=True)
+
+        # Bootstrap evidence is now permanently frozen. Free this model before loading
+        # the independent downstream task adapter/model.
+        del bootstrap_optimizer, bootstrap_lm
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
     # Stage B: Bootstrap-MNGM initial graph.
@@ -253,6 +271,7 @@ def main():
     # ------------------------------------------------------------------
     # Stage C: independent task model + retrieval Graph-RL.
     # ------------------------------------------------------------------
+    import torch
     print("Loading independent retrieval task model...", flush=True)
     task_lm, tokenizer = load_local_causal_lm(
         args.task_model,
