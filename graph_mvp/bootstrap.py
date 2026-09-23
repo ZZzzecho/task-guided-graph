@@ -271,6 +271,73 @@ def train_bootstrap_version(model, tokenizer, texts, optimizer, *, steps=1,
     }
 
 
+def train_bootstrap_version_epochs(
+    model,
+    tokenizer,
+    texts,
+    optimizer,
+    *,
+    epochs=3,
+    batch_size=1,
+    max_length=256,
+    max_grad_norm=1.0,
+    shuffle_seed=123,
+):
+    """Train one perturbed corpus version for complete ordinary-LM epochs.
+
+    One epoch means every document in this version is consumed exactly once
+    (up to the final short batch). Document order is reshuffled deterministically
+    between epochs. This is intentionally more expensive than the old smoke-only
+    fixed-step approximation.
+    """
+    if epochs < 1 or batch_size < 1:
+        raise ValueError("epochs and batch_size must be positive")
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("Bootstrap LM training requires PyTorch") from exc
+    values = tuple(map(str, texts))
+    if not values:
+        raise ValueError("texts must be nonempty")
+    model.train()
+    device = model.get_input_embeddings().weight.device
+    losses = []
+    per_epoch = []
+    total_steps = 0
+    for epoch in range(int(epochs)):
+        order = list(range(len(values)))
+        random.Random(int(shuffle_seed) + epoch).shuffle(order)
+        epoch_losses = []
+        for start in range(0, len(order), int(batch_size)):
+            ids = order[start:start + int(batch_size)]
+            batch_text = [values[i] for i in ids]
+            batch = _lm_batch(tokenizer, batch_text, max_length=max_length, device=device)
+            out = model(**batch)
+            loss = out.loss
+            if loss is None or not torch.isfinite(loss):
+                raise RuntimeError("nonfinite bootstrap LM loss")
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            params = [p for p in model.parameters() if p.requires_grad]
+            torch.nn.utils.clip_grad_norm_(params, float(max_grad_norm))
+            optimizer.step()
+            value = float(loss.detach().cpu())
+            losses.append(value)
+            epoch_losses.append(value)
+            total_steps += 1
+        per_epoch.append(float(np.mean(epoch_losses)))
+    return {
+        "epochs": int(epochs),
+        "steps": int(total_steps),
+        "documents": int(len(values)),
+        "batch_size": int(batch_size),
+        "initial_loss": losses[0],
+        "final_loss": losses[-1],
+        "mean_loss": float(np.mean(losses)),
+        "epoch_mean_losses": per_epoch,
+    }
+
+
 def make_shuffled_versions_frame(frame, text_col="text", n_versions=4, seed=123):
     """Return only the shuffled bootstrap versions for an in-memory DataFrame."""
     if text_col not in frame.columns:
