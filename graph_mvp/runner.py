@@ -131,6 +131,7 @@ class GraphPhaseRecord:
     accepted: bool
     acceptance_reason: str
     adapted: bool
+    post_adaptation_validation: TaskMetrics | None = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,7 @@ class GraphPhaseRunner:
             validation_proposal = None
             accepted = False
             adapted = False
+            post_adaptation_validation = None
             if proposal is None:
                 reason = "No valid reward-panel proposal"
             else:
@@ -246,10 +248,17 @@ class GraphPhaseRunner:
                 if self.task_adapter is not None:
                     self.task_adapter(state)
                     adapted = True
+                    # Acceptance itself is intentionally based on the frozen-model
+                    # graph comparison above. Record the post-adaptation metric
+                    # separately so task adaptation cannot be confused with graph gain.
+                    post_adaptation_validation = self.validation_evaluator.evaluate_snapshot(
+                        state.snapshot, validation_context
+                    )
             record = GraphPhaseRecord(
                 phase, parent.state_id, state.state_id, tuple(update_records),
                 None if proposal is None else proposal.candidate_id,
-                validation_baseline, validation_proposal, accepted, reason, adapted)
+                validation_baseline, validation_proposal, accepted, reason, adapted,
+                post_adaptation_validation)
             records.append(record)
             if on_phase:
                 on_phase(record)
