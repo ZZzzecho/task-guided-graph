@@ -1,3 +1,5 @@
+> **Historical document.** This file records the 2026-09-22 MIMIC-first design stage and is not the current experiment entry point. For the current H04L + Patient/Bootstrap-MNGM mainline, read `README.md` and `docs/CURRENT_RESEARCH_HANDOFF_2026-09-23.md`.
+
 # Bootstrap-MNGM + Task-Guided Graph RL：当前完整方案与下一步实验交接
 
 > 日期：2026-09-22  
