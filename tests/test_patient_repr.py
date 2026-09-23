@@ -47,6 +47,29 @@ def test_patient_builder_shape_and_attention_normalization():
     assert torch.isfinite(h).all()
 
 
+def test_patient_builder_mrl_reduction_keeps_full_space_attention():
+    prototypes = np.array([
+        [1, 0, 0, 0],
+        [0, 1, 0, 0],
+        [0, 0, 1, 0],
+    ], dtype=np.float32)
+    builder = PatientConceptMatrixBuilder(
+        FakeEncoder(), prototypes, temperature=0.2, representation_dim=2
+    )
+    z = torch.tensor([
+        [[1., 0, 0, 0], [0, 1., 0, 0], [0, 0, 1., 0]],
+        [[1., 1, 0, 0], [0, 1., 1, 0], [1., 0, 1., 0]],
+    ])
+    mask = torch.ones((2, 3), dtype=torch.bool)
+    h, alpha = builder.from_hidden_states(z, mask)
+    assert alpha.shape == (2, 3, 3)
+    assert h.shape == (2, 2, 3)
+    assert builder.encoder_hidden_size == 4
+    assert builder.hidden_size == 2
+    norms = torch.linalg.vector_norm(h, dim=1)
+    assert torch.allclose(norms, torch.ones_like(norms), atol=1e-6)
+
+
 def test_concept_prototype_cache_roundtrip(tmp_path):
     vocab = ConceptVocabulary(("c1", "c2"), ("heart failure", "fever"))
     p = np.eye(2, 4, dtype=np.float32)
