@@ -22,7 +22,7 @@ from sklearn.exceptions import ConvergenceWarning
 
 from .config import DataConfig, MNGMConfig, SolverConfig
 from .data import RankGaussianTransformer, training_covariance
-from .types import readonly, freeze, symmetric_matrix
+from .types import readonly, freeze, thaw, symmetric_matrix
 from .weighted_glasso import WeightedGraphicalLasso, penalty_matrix
 
 VECTOR_MODE = "patient_activation_vector"
@@ -127,7 +127,7 @@ class EstimatorResult:
         for k, v in self.auxiliary.items():
             if isinstance(v, np.ndarray):
                 continue
-            out[k] = v
+            out[k] = thaw(v)
         return out
 
 
