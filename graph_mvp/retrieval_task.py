@@ -334,8 +334,14 @@ class FrozenGraphRetrievalEvaluator:
                     global_graph=snapshot.Rho,
                     return_aux=True,
                 )
-                cand = self._candidate_tensor(info["candidate_ids"], device, q.dtype)
-                scores = torch.einsum("bd,bkd->bk", q, cand) / context.score_temperature
+                # Keep the expensive LM/graph forward in BF16/FP16, but compute
+                # retrieval scores and NLL in FP32. Graph-RL needs reward differences
+                # much finer than BF16's quantization grid.
+                q_score = q.float()
+                cand = self._candidate_tensor(
+                    info["candidate_ids"], device, torch.float32
+                )
+                scores = torch.einsum("bd,bkd->bk", q_score, cand) / float(context.score_temperature)
                 gold = torch.as_tensor(info["positive_indices"], dtype=torch.long, device=device)
                 losses = F.cross_entropy(scores, gold, reduction="none")
                 if not torch.isfinite(losses).all():
@@ -434,8 +440,13 @@ def adapt_retrieval_model(
             device=device,
         )
         q = model.encode_queries(**batch, global_graph=snapshot.Rho, return_aux=False)
-        cand = evaluator._candidate_tensor(info["candidate_ids"], device, q.dtype).detach()
-        scores = torch.einsum("bd,bkd->bk", q, cand) / context.score_temperature
+        # FP32 ranking loss gives stable gradients/rewards while the backbone stays
+        # in its native BF16/FP16 dtype. Casting q is differentiable.
+        q_score = q.float()
+        cand = evaluator._candidate_tensor(
+            info["candidate_ids"], device, torch.float32
+        ).detach()
+        scores = torch.einsum("bd,bkd->bk", q_score, cand) / float(context.score_temperature)
         gold = torch.as_tensor(info["positive_indices"], dtype=torch.long, device=device)
         loss = F.cross_entropy(scores, gold)
         if not torch.isfinite(loss):
