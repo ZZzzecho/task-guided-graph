@@ -62,7 +62,7 @@ class WeightedGraphicalLasso:
         self.config = config
         self.solve_calls = 0
 
-    def solve(self, S, penalty, initial_theta=None):
+    def solve(self, S, penalty, initial_theta=None, progress_callback=None, progress_every=25, label="glasso"):
         s = symmetric_matrix(S, "S")
         p = s.shape[0]
         if np.linalg.eigvalsh(s)[0] < -1e-10 or np.any(np.diag(s) <= 0):
@@ -96,6 +96,19 @@ class WeightedGraphicalLasso:
             dual = float(c.rho * np.linalg.norm(z - previous_z, "fro"))
             eps_primal = p * c.abs_tol + c.rel_tol * max(np.linalg.norm(x), np.linalg.norm(z))
             eps_dual = p * c.abs_tol + c.rel_tol * np.linalg.norm(c.rho * u)
+            if progress_callback is not None and (
+                iteration == 1 or iteration % max(int(progress_every), 1) == 0
+            ):
+                progress_callback({
+                    "stage": label,
+                    "iteration": int(iteration),
+                    "max_iter": int(c.max_iter),
+                    "dimension": int(p),
+                    "primal": primal,
+                    "dual": dual,
+                    "eps_primal": float(eps_primal),
+                    "eps_dual": float(eps_dual),
+                })
             if primal <= eps_primal and dual <= eps_dual:
                 mineig = float(np.linalg.eigvalsh(z)[0])
                 if mineig > 0:
