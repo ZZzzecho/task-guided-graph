@@ -23,7 +23,7 @@ def main():
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--shard-size", type=int, default=16)
     p.add_argument("--temperature", type=float, default=0.1)
-    p.add_argument("--max-patients", type=int, default=None, help="Deterministic prefix for smoke/scale tests")
+    p.add_argument("--max-patients", type=int, default=None, help="Deterministic prefix for smoke/scale tests")\n    p.add_argument("--id-col", default=None, help="Optional sample ID column; auto-detects patent_id or subject_id")
     p.add_argument("--flash-attention", action="store_true")
     p.add_argument("--overwrite", action="store_true")
     args = p.parse_args()
