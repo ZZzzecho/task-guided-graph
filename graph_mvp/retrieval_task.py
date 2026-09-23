@@ -206,7 +206,10 @@ def _build_retriever_class():
             try:
                 device = embedding.weight.device
                 if device.type != "meta":
-                    self.graph_tokenizer.to(device)
+                    self.graph_tokenizer.to(
+                        device=device,
+                        dtype=embedding.weight.dtype,
+                    )
             except AttributeError:
                 pass
 
