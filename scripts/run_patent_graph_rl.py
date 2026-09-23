@@ -129,6 +129,115 @@ def _write_csv(path, rows):
         writer.writerows(rows)
 
 
+def _progress_printer(info):
+    stage = info.get("stage", "progress")
+    if stage in ("task_warmup", "task_adapt"):
+        print(
+            f"[{stage}] step {info['step']}/{info['total_steps']} "
+            f"loss={info['loss']:.6f}",
+            flush=True,
+        )
+        return
+    if stage == "phase_start":
+        print(
+            f"[GraphRL] phase {info['phase']}/{info['total_phases']} START "
+            f"state={info['state_id']}",
+            flush=True,
+        )
+        return
+    if stage == "grpo_update_start":
+        print(
+            f"[GraphRL] phase {info['phase']}/{info['total_phases']} "
+            f"update {info['update']}/{info['total_updates']} START",
+            flush=True,
+        )
+        return
+    if stage == "candidate_start":
+        print(
+            f"[GraphRL] phase {info['phase']}/{info['total_phases']} "
+            f"update {info['update']}/{info['total_updates']} "
+            f"candidate {info['candidate']}/{info['total_candidates']} "
+            f"{info['candidate_id']} START",
+            flush=True,
+        )
+        return
+    if stage.startswith("candidate_mngm_outer"):
+        print(
+            f"[GraphRL:MNGM] p{info['phase']} u{info['update']} "
+            f"c{info['candidate']}/{info['total_candidates']} "
+            f"outer {info['iteration']}/{info['max_iter']}",
+            flush=True,
+        )
+        return
+    if stage.startswith("candidate_concept_glasso"):
+        iteration = int(info.get("iteration", 0))
+        max_iter = int(info.get("max_iter", 0))
+        if iteration == 1 or iteration % 50 == 0 or iteration == max_iter:
+            print(
+                f"[GraphRL:GLASSO] p{info['phase']} u{info['update']} "
+                f"c{info['candidate']}/{info['total_candidates']} "
+                f"{stage.replace('candidate_', '')} "
+                f"{iteration}/{max_iter} "
+                f"primal={info.get('primal', float('nan')):.3e} "
+                f"dual={info.get('dual', float('nan')):.3e}",
+                flush=True,
+            )
+        return
+    if stage.startswith("candidate_representation_glasso"):
+        print(
+            f"[GraphRL:repr] p{info['phase']} u{info['update']} "
+            f"c{info['candidate']}/{info['total_candidates']} "
+            f"iter={info.get('iteration')}",
+            flush=True,
+        )
+        return
+    if stage == "candidate_done":
+        print(
+            f"[GraphRL] phase {info['phase']} update {info['update']} "
+            f"candidate {info['candidate']}/{info['total_candidates']} DONE "
+            f"reward={info['reward']:.6g} delta_task={info['delta_task']:.6g} "
+            f"valid={info['valid']}",
+            flush=True,
+        )
+        return
+    if stage == "grpo_update_done":
+        pu = info.get("policy_update", {})
+        print(
+            f"[GRPO] phase {info['phase']} update {info['update']}/{info['total_updates']} "
+            f"updated={pu.get('updated')} "
+            f"reward_mean={pu.get('reward_mean')} reward_std={pu.get('reward_std')} "
+            f"loss={pu.get('loss')} kl={pu.get('kl_to_reference')} "
+            f"entropy={pu.get('entropy')} "
+            f"elapsed={info.get('elapsed_seconds', 0.0):.1f}s",
+            flush=True,
+        )
+        return
+    if stage == "mngm_outer":
+        print(
+            f"[Initial MNGM] outer {info['iteration']}/{info['max_iter']} "
+            f"R={info['representation_dim']} P={info['concept_dim']}",
+            flush=True,
+        )
+        return
+    if stage in ("concept_glasso", "concept_glasso_final"):
+        iteration = int(info.get("iteration", 0))
+        max_iter = int(info.get("max_iter", 0))
+        if iteration == 1 or iteration % 50 == 0 or iteration == max_iter:
+            print(
+                f"[Initial {stage}] {iteration}/{max_iter} "
+                f"primal={info.get('primal', float('nan')):.3e} "
+                f"dual={info.get('dual', float('nan')):.3e}",
+                flush=True,
+            )
+        return
+    if stage == "representation_glasso":
+        print(
+            f"[Initial representation_glasso] iter={info.get('iteration')} "
+            f"dual={info.get('dual', float('nan')):.3e}",
+            flush=True,
+        )
+
+
 def _save_graph(path, state):
     s = state.snapshot
     np.savez_compressed(
@@ -231,7 +340,12 @@ def main():
     env = GraphEnvironment(config=cfg.environment, estimator=estimator)
     lam0 = cfg.runner.initial_lambda if args.initial_lambda is None else float(args.initial_lambda)
     print(f"Initializing MNGM graph from shape={list(matrices.shape)} lambda={lam0}", flush=True)
-    state0 = env.initialize_from_estimator(lam0, cache.concept_ids, state_id="patent-state-0")
+    state0 = env.initialize_from_estimator(
+        lam0,
+        cache.concept_ids,
+        state_id="patent-state-0",
+        progress_callback=_progress_printer,
+    )
     print(f"Initial graph: {graph_metrics(state0.snapshot)}", flush=True)
     _save_graph(args.output / "initial_graph.npz", state0)
     _write_json(args.output / "mngm" / "initial_summary.json", {
@@ -295,7 +409,10 @@ def main():
     if args.warmup_steps > 0:
         warmup = adapt_retrieval_model(
             model, evaluator, state0.snapshot, train_ctx, optimizer,
-            steps=args.warmup_steps, max_grad_norm=cfg.grpo.max_grad_norm,
+            steps=args.warmup_steps,
+            max_grad_norm=cfg.grpo.max_grad_norm,
+            progress_callback=_progress_printer,
+            progress_label="task_warmup",
         )
         print(f"retrieval warmup: {warmup}", flush=True)
 
@@ -316,7 +433,10 @@ def main():
     def task_adapter(accepted_state):
         return adapt_retrieval_model(
             model, evaluator, accepted_state.snapshot, train_ctx, optimizer,
-            steps=args.adapt_steps, max_grad_norm=cfg.grpo.max_grad_norm,
+            steps=args.adapt_steps,
+            max_grad_norm=cfg.grpo.max_grad_norm,
+            progress_callback=_progress_printer,
+            progress_label="task_adapt",
         )
 
     runner = GraphPhaseRunner(
@@ -427,6 +547,7 @@ def main():
         policy_updates_per_phase=args.policy_updates_per_phase,
         num_candidates=cfg.runner.num_candidates if args.num_candidates is None else args.num_candidates,
         on_phase=report,
+        progress_callback=_progress_printer,
     )
 
     _save_graph(args.output / "final_graph.npz", result.final_state)
