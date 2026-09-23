@@ -169,7 +169,10 @@ def _build_wrapper_class():
             try:
                 entry_device = embedding.weight.device
                 if entry_device.type != "meta":
-                    self.graph_tokenizer.to(entry_device)
+                    self.graph_tokenizer.to(
+                        device=entry_device,
+                        dtype=embedding.weight.dtype,
+                    )
             except AttributeError:
                 pass
 
