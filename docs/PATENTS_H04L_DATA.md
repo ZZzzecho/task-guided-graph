@@ -140,3 +140,76 @@ H_d [64,800]
 
 Thus the reduction changes only the statistical MNGM representation axis; it does
 not change downstream GLM hidden size or graph-token output dimension.
+
+
+## Citation-retrieval Graph-RL
+
+Build deterministic fixed candidate pools for the three non-test roles:
+
+```bash
+python scripts/build_patent_retrieval_candidates.py \
+  --prepared-dir data/patents_h04l \
+  --output data/patents_h04l/retrieval_train_candidates.jsonl \
+  --split train \
+  --negatives-per-query 63 \
+  --max-queries 512 \
+  --seed 17
+
+python scripts/build_patent_retrieval_candidates.py \
+  --prepared-dir data/patents_h04l \
+  --output data/patents_h04l/retrieval_graph_candidates.jsonl \
+  --split graph \
+  --negatives-per-query 63 \
+  --max-queries 512 \
+  --seed 17
+
+python scripts/build_patent_retrieval_candidates.py \
+  --prepared-dir data/patents_h04l \
+  --output data/patents_h04l/retrieval_val_candidates.jsonl \
+  --split val \
+  --negatives-per-query 63 \
+  --max-queries 512 \
+  --seed 17
+```
+
+The downstream task is fixed-pool examiner-citation retrieval. For each query patent,
+the pool contains one examiner-cited earlier patent and 63 fixed hard negatives.
+Graph-RL uses mean 64-way retrieval NLL as the task utility
+(`task_metric = -mean_nll`). MRR, Recall@K, NDCG@10 and mean rank are reported as
+secondary metrics.
+
+Candidate patent embeddings are encoded once into a frozen retrieval index. The
+query patent alone receives sample-conditioned graph tokens, so changing a graph
+candidate changes the query representation while the retrieval pool and candidate
+representations stay fixed within and across graph phases.
+
+Minimal end-to-end smoke:
+
+```bash
+python scripts/run_patent_graph_rl.py \
+  --cache data/patents_h04l/cache_smoke_32_r64 \
+  --concepts data/patents_h04l/concepts.json \
+  --data-dir data/patents_h04l \
+  --train-pools data/patents_h04l/retrieval_train_candidates.jsonl \
+  --graph-pools data/patents_h04l/retrieval_graph_candidates.jsonl \
+  --val-pools data/patents_h04l/retrieval_val_candidates.jsonl \
+  --config configs/patent_h04l_glm_v0.4.json \
+  --task-model /laijizheng/models/GLM-4.7-Flash \
+  --task-local-files-only \
+  --initial-lambda 0.4 \
+  --max-mngm-documents 32 \
+  --max-train-queries 8 \
+  --max-reward-queries 4 \
+  --max-val-queries 4 \
+  --warmup-steps 2 \
+  --adapt-steps 2 \
+  --phases 1 \
+  --num-candidates 2 \
+  --policy-updates-per-phase 1 \
+  --task-batch-size 1 \
+  --candidate-batch-size 4 \
+  --task-max-length 256 \
+  --output outputs/patent_h04l_graph_rl_smoke
+```
+
+The test split is not loaded by this runner.
