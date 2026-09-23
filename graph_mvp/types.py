@@ -104,6 +104,8 @@ class ActionRecord:
     action: str
     log_prob: float
     policy_version: str
+    selection_log_prob: float | None = None
+    direction_log_prob: float | None = None
 
     def __post_init__(self):
         edge = tuple(self.edge)
@@ -115,6 +117,10 @@ class ActionRecord:
             raise ValueError("unknown penalty action")
         if not np.isfinite(self.log_prob) or self.log_prob > 1e-12:
             raise ValueError("log_prob must be finite and <= 0")
+        for name in ("selection_log_prob", "direction_log_prob"):
+            value = getattr(self, name)
+            if value is not None and (not np.isfinite(value) or value > 1e-12):
+                raise ValueError(f"{name} must be finite and <= 0 when provided")
         object.__setattr__(self, "edge", edge)
 
 
