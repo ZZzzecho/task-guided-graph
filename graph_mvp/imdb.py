@@ -128,4 +128,20 @@ def prepare_imdb(root_dir, output_dir, *, seed=7):
         "official_test_preserved": True,
         "splits": {name: _describe(df) for name, df in splits.items()},
     }
-    (output / "summary.json").write_text(\n        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"\n    )\n    task = {\n        "instruction": (\n            "Classify the sentiment of the movie review. " \n            "Answer exactly NEGATIVE or POSITIVE.\\n\\n"\n        ),\n        "label_texts": ["NEGATIVE", "POSITIVE"],\n        "answer_prefix": "\\n\\nSentiment:",\n    }\n    (output / "task.json").write_text(\n        json.dumps(task, indent=2, ensure_ascii=False), encoding="utf-8"\n    )\n    return summary\n
+    (output / "summary.json").write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    task = {
+        "instruction": (
+            "Classify the sentiment of the movie review. "
+            "Answer exactly NEGATIVE or POSITIVE.\n\n"
+        ),
+        "label_texts": ["NEGATIVE", "POSITIVE"],
+        "answer_prefix": "\n\nSentiment:",
+    }
+    (output / "task.json").write_text(
+        json.dumps(task, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return summary
