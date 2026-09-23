@@ -256,7 +256,8 @@ class MNGMEstimator:
         # approximately per-cell degradation, independent of representation width.
         return float((-self.p * logdet_b - self.r * logdet_a + trace) / self.r)
 
-    def solve(self, concept_penalty, initial_theta=None, initial_representation_precision=None):
+    def solve(self, concept_penalty, initial_theta=None, initial_representation_precision=None,
+              progress_callback=None):
         lam_a = penalty_matrix(self.p, concept_penalty)
         lam_b = penalty_matrix(self.r, self.config.representation_penalty)
         a = np.eye(self.p) if initial_theta is None else symmetric_matrix(initial_theta, "initial_theta", self.p).copy()
@@ -270,8 +271,19 @@ class MNGMEstimator:
         last_sc = last_sr = None
         concept_info = representation_info = None
         for iteration in range(1, self.config.max_iter + 1):
+            if progress_callback is not None:
+                progress_callback({
+                    "stage": "mngm_outer",
+                    "iteration": int(iteration),
+                    "max_iter": int(self.config.max_iter),
+                    "representation_dim": int(self.r),
+                    "concept_dim": int(self.p),
+                })
             last_sc = self._concept_covariance(b)
-            ra = self.concept_solver.solve(last_sc, lam_a, initial_theta=a)
+            ra = self.concept_solver.solve(
+                last_sc, lam_a, initial_theta=a,
+                progress_callback=progress_callback, label="concept_glasso"
+            )
             concept_info = ra.info()
             if not ra.converged:
                 return EstimatorResult(None, None, False, iteration,
@@ -283,7 +295,10 @@ class MNGMEstimator:
                      "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solver.solve_calls - start_inner_calls})
             a_new = np.asarray(ra.Theta)
             last_sr = self._representation_covariance(a_new)
-            rb = self.representation_solver.solve(last_sr, lam_b, initial_theta=b)
+            rb = self.representation_solver.solve(
+                last_sr, lam_b, initial_theta=b,
+                progress_callback=progress_callback, label="representation_glasso"
+            )
             representation_info = rb.info()
             if not rb.converged:
                 return EstimatorResult(None, None, False, iteration,
@@ -301,7 +316,10 @@ class MNGMEstimator:
             if diff <= self.config.tol:
                 # Recompute concept covariance under the final normalized B.
                 last_sc = self._concept_covariance(b)
-                final_a = self.concept_solver.solve(last_sc, lam_a, initial_theta=a)
+                final_a = self.concept_solver.solve(
+                    last_sc, lam_a, initial_theta=a,
+                    progress_callback=progress_callback, label="concept_glasso_final"
+                )
                 concept_info = final_a.info()
                 if final_a.converged:
                     a = np.asarray(final_a.Theta)
