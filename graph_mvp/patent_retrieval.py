@@ -29,25 +29,27 @@ def _load_assignments(path):
     return grouped
 
 
-def _load_examiner_positives(path):
+def _load_citation_sets(path):
     pd = _pd()
     df = pd.read_csv(path, dtype=str)
     required = {"patent_id", "citation_patent_id"}
     if not required.issubset(df.columns):
         raise ValueError("citations.csv.gz missing patent IDs")
+    all_pos = defaultdict(set)
+    examiner_pos = defaultdict(list)
     if "citation_category" in df.columns:
-        category = df["citation_category"].fillna("").astype(str).str.lower()
-        examiner = df[category.str.contains("examiner", regex=False)].copy()
-        if len(examiner) == 0:
-            examiner = df.copy()
+        categories = df["citation_category"].fillna("").astype(str).str.lower()
     else:
-        examiner = df.copy()
-    out = defaultdict(list)
-    for q, p in zip(examiner["patent_id"].astype(str),
-                    examiner["citation_patent_id"].astype(str)):
-        if p not in out[q]:
-            out[q].append(p)
-    return out
+        categories = None
+    for idx, (q, p) in enumerate(zip(df["patent_id"].astype(str),
+                                     df["citation_patent_id"].astype(str))):
+        all_pos[q].add(p)
+        is_examiner = categories is None or "examiner" in categories.iloc[idx]
+        if is_examiner and p not in examiner_pos[q]:
+            examiner_pos[q].append(p)
+    # If category metadata is absent or a query has no examiner-tagged citation,
+    # the caller may still choose to skip that query rather than relabel applicants.
+    return examiner_pos, all_pos
 
 
 def _jaccard(a, b):
@@ -89,7 +91,7 @@ def build_fixed_candidate_pools(
     queries = pd.read_csv(qpath, dtype=str)
     corpus = pd.read_csv(root / "corpus.csv.gz", dtype=str)
     assignments = _load_assignments(root / "concept_assignments.csv.gz")
-    positives = _load_examiner_positives(root / "citations.csv.gz")
+    positives, all_citations = _load_citation_sets(root / "citations.csv.gz")
 
     corpus = corpus[["patent_id", "patent_date"]].copy()
     date_by_id = dict(zip(corpus["patent_id"].astype(str), corpus["patent_date"].astype(str)))
@@ -115,7 +117,7 @@ def build_fixed_candidate_pools(
         for code in qcodes:
             candidates.update(inverted.get(code, ()))
         candidates.discard(qid)
-        candidates.difference_update(pos_all)
+        candidates.difference_update(all_citations.get(qid, set()))
         candidates = [
             pid for pid in candidates
             if date_by_id.get(pid, "") < qdate
@@ -135,7 +137,7 @@ def build_fixed_candidate_pools(
 
         # Fallback: same-domain earlier patents if CPC-overlap pool is too small.
         if len(negatives) < int(negatives_per_query):
-            used = set(negatives) | {qid, positive} | set(pos_all)
+            used = set(negatives) | {qid, positive} | set(all_citations.get(qid, set()))
             fallback = [pid for pid in all_ids if pid not in used and date_by_id.get(pid, "") < qdate]
             rng.shuffle(fallback)
             negatives.extend(fallback[: int(negatives_per_query) - len(negatives)])
