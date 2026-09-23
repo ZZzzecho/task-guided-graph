@@ -64,6 +64,43 @@ python -m pytest -q
 
 ---
 
+
+## Current first non-medical experiment: H04L patents
+
+The first domain-adaptation experiment is now **PatentsView H04L + CPC concepts +
+patent citation retrieval**.
+
+Research constraint: the downstream target is deliberately **not** CPC concept
+prediction. CPC assignments define/filter the shared concept universe, while the
+actual task target is a cited prior patent. This keeps node activation distinct
+from downstream supervision and lets graph-edge quality be tested separately.
+
+Data preparation:
+
+```bash
+bash scripts/download_patentsview_h04l.sh /laijizheng/datasets/patentsview_h04l_raw
+
+prepare-patents-h04l \
+  --data-dir /laijizheng/datasets/patentsview_h04l_raw \
+  --output data/patents_h04l \
+  --min-year 2005 \
+  --max-year 2024 \
+  --target-concepts 800 \
+  --min-concept-patents 50
+```
+
+The processor streams the large PatentsView tables, restricts the corpus to H04L
+utility patents with usable title/abstract text, selects the concept vocabulary
+using train-period CPC frequency only, keeps chronologically later graph/val/test
+splits, and builds internal H04L citation positives.
+
+See:
+
+```text
+docs/DATASET_TASK_FIT.md
+docs/PATENTS_H04L_DATA.md
+```
+
 ## v0.2 Bootstrap 基线说明（仍然有效）
 
 本版本按照 `docs/BOOTSTRAP_MNGM_GRAPH_RL_HANDOFF_v0.2_2026-09-22.md` 对原 `task_guided_graph_mvp_v0.1.2` 做增量升级。统计后端继续使用已经验证的 `WeightedGraphicalLasso` / `MNGMEstimator`，主要新增 **active+frontier 搜索、32-edge batch GRPO、Graph Phase 独立 validation acceptance、MIMIC-IV-ED preprocessing、sample-conditioned SoftGraphTokenizer 与 Qwen causal-LM 接口**。
