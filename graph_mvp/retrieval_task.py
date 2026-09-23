@@ -471,6 +471,8 @@ def adapt_retrieval_model(
     *,
     steps=50,
     max_grad_norm=1.0,
+    progress_callback=None,
+    progress_label="task_adapt",
 ):
     """Accepted-graph-only LoRA + SoftGraphTokenizer query-side adaptation."""
     if steps < 1:
@@ -481,7 +483,7 @@ def adapt_retrieval_model(
     device = model.device
     iterator = iter(context.batches())
     losses_out = []
-    for _ in range(int(steps)):
+    for step_index in range(int(steps)):
         try:
             info = next(iterator)
         except StopIteration:
@@ -510,7 +512,15 @@ def adapt_retrieval_model(
         params = [p for p in model.parameters() if p.requires_grad]
         torch.nn.utils.clip_grad_norm_(params, float(max_grad_norm))
         optimizer.step()
-        losses_out.append(float(loss.detach().cpu()))
+        loss_value = float(loss.detach().cpu())
+        losses_out.append(loss_value)
+        if progress_callback is not None:
+            progress_callback({
+                "stage": str(progress_label),
+                "step": int(step_index + 1),
+                "total_steps": int(steps),
+                "loss": loss_value,
+            })
     return {
         "steps": int(steps),
         "initial_loss": losses_out[0],
