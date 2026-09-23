@@ -395,6 +395,60 @@ class FrozenGraphRetrievalEvaluator:
         _, activation, losses = self._score(snapshot, task_context, return_activation=True)
         return error_weighted_edge_relevance(activation, losses, normalize=True)
 
+    def score_details(self, snapshot, context: RetrievalTaskContext, top_k=10):
+        """Return per-query ranking details for offline analysis."""
+        if snapshot.concept_ids != context.concept_ids:
+            raise ValueError("Graph/data concept axis mismatch")
+        torch, F = _torch()
+        self.prepare(context)
+        self.model.eval()
+        device = self.model.device
+        rows = []
+        with torch.no_grad():
+            for info in context.batches():
+                batch = encode_text_batch(
+                    context.tokenizer,
+                    info["query_texts"],
+                    max_length=context.max_length,
+                    device=device,
+                )
+                q = self.model.encode_queries(
+                    **batch,
+                    global_graph=snapshot.Rho,
+                    return_aux=False,
+                ).float()
+                cand = self._candidate_tensor(
+                    info["candidate_ids"], device, torch.float32
+                )
+                scores = torch.einsum("bd,bkd->bk", q, cand) / float(context.score_temperature)
+                probs = torch.softmax(scores, dim=1)
+                order = torch.argsort(scores, dim=1, descending=True)
+                for i, qid in enumerate(info["query_ids"]):
+                    gold = int(info["positive_indices"][i])
+                    rank = int((order[i] == gold).nonzero(as_tuple=False)[0, 0].item()) + 1
+                    loss = float(F.cross_entropy(
+                        scores[i:i+1],
+                        torch.tensor([gold], device=device),
+                        reduction="mean",
+                    ).cpu())
+                    kk = min(int(top_k), scores.shape[1])
+                    top_idx = order[i, :kk].detach().cpu().tolist()
+                    pool = info["candidate_ids"][i]
+                    rows.append({
+                        "query_id": str(qid),
+                        "positive_id": str(pool[gold]),
+                        "positive_index": gold,
+                        "positive_rank": rank,
+                        "nll": loss,
+                        "reciprocal_rank": 1.0 / rank,
+                        "positive_score": float(scores[i, gold].cpu()),
+                        "positive_probability": float(probs[i, gold].cpu()),
+                        "top_ids": [str(pool[j]) for j in top_idx],
+                        "top_scores": [float(scores[i, j].cpu()) for j in top_idx],
+                    })
+        return rows
+
+
 
 class RetrievalTaskRelevanceProvider:
     def __init__(self, evaluator: FrozenGraphRetrievalEvaluator):
