@@ -31,7 +31,28 @@ def main():
     est = MNGMEstimator(x, PATIENT_MATRIX_MODE, cfg.mngm, cfg.solver)
     lam0 = cfg.runner.initial_lambda if args.initial_lambda is None else args.initial_lambda
     lam = penalty_matrix(ds.num_concepts, lam0)
-    result = est.solve(lam)
+    def progress(info):
+        stage = info.get("stage", "solver")
+        if stage == "mngm_outer":
+            print(
+                f"[MNGM] outer {info['iteration']}/{info['max_iter']} "
+                f"R={info['representation_dim']} P={info['concept_dim']}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[{stage}] iter {info['iteration']}/{info['max_iter']} "
+                f"dim={info['dimension']} primal={info['primal']:.3e} "
+                f"dual={info['dual']:.3e}",
+                flush=True,
+            )
+
+    print(
+        f"Starting MNGM with shape={list(x.shape)} lambda={lam0} "
+        f"(dense NumPy solver; CPU-bound)",
+        flush=True,
+    )
+    result = est.solve(lam, progress_callback=progress)
     args.output.mkdir(parents=True, exist_ok=True)
     summary = {
         "cache": str(args.cache),
