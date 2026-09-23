@@ -11,6 +11,8 @@ import numpy as np
 
 from graph_mvp.bootstrap import (
     attach_bootstrap_embedding_lora,
+    capture_trainable_state,
+    restore_trainable_state,
     extract_concept_embedding_matrix,
     fixed_pca_projection,
     make_shuffled_versions_frame,
@@ -173,7 +175,7 @@ def main():
         trainable = [p for p in bootstrap_lm.parameters() if p.requires_grad]
         if not trainable:
             raise SystemExit("bootstrap embedding LoRA exposed no trainable parameters")
-        bootstrap_optimizer = torch.optim.AdamW(trainable, lr=args.bootstrap_lr)
+        initial_bootstrap_state = capture_trainable_state(bootstrap_lm)
 
         frame = _load_bootstrap_frame(args.data_dir, args.bootstrap_docs)
         versions = make_shuffled_versions_frame(
@@ -200,6 +202,13 @@ def main():
 
         snapshots = []
         for b, texts in enumerate(versions):
+            # Each bootstrap/permutation version is an independent replicate:
+            # same adapter initialization, same training budget, different perturbed text.
+            restore_trainable_state(bootstrap_lm, initial_bootstrap_state)
+            bootstrap_optimizer = torch.optim.AdamW(
+                [p for p in bootstrap_lm.parameters() if p.requires_grad],
+                lr=args.bootstrap_lr,
+            )
             stats = train_bootstrap_version(
                 bootstrap_lm,
                 bootstrap_tokenizer,
@@ -235,7 +244,8 @@ def main():
             version_ids=tuple(f"version-{i + 1:02d}" for i in range(len(H))),
             metadata={
                 "sentence_order_perturbation": True,
-                "continuous_lora_trajectory": True,
+                "continuous_lora_trajectory": False,
+                "independent_adapter_reset_per_version": True,
                 "representation_projection": "fixed_pretraining_PCA",
                 "representation_dim": int(args.bootstrap_representation_dim),
                 "bootstrap_docs": int(len(frame)),
