@@ -19,7 +19,7 @@ from graph_mvp.bootstrap import (
     project_concept_matrix,
     save_bootstrap_bundle,
     load_bootstrap_bundle,
-    train_bootstrap_version,
+    train_bootstrap_version_epochs,
 )
 from graph_mvp.config import Config
 from graph_mvp.environment import GraphEnvironment, CandidateBuilder, graph_metrics
@@ -94,7 +94,12 @@ def main():
     p.add_argument("--bootstrap-device-map", default="auto")
     p.add_argument("--bootstrap-versions", type=int, default=4)
     p.add_argument("--bootstrap-docs", type=int, default=8)
-    p.add_argument("--bootstrap-steps-per-version", type=int, default=1)
+    p.add_argument(
+        "--bootstrap-epochs-per-version",
+        type=int,
+        default=3,
+        help="Complete ordinary-LM epochs for every independently reset perturbation version.",
+    )
     p.add_argument("--bootstrap-batch-size", type=int, default=1)
     p.add_argument("--bootstrap-max-length", type=int, default=256)
     p.add_argument("--bootstrap-lr", type=float, default=1e-4)
@@ -133,8 +138,8 @@ def main():
 
     if args.bootstrap_versions < 2:
         raise SystemExit("--bootstrap-versions must be >=2")
-    if args.bootstrap_docs < 1 or args.bootstrap_steps_per_version < 1:
-        raise SystemExit("invalid bootstrap smoke budget")
+    if args.bootstrap_docs < 1 or args.bootstrap_epochs_per_version < 1:
+        raise SystemExit("invalid bootstrap training budget")
     if args.bootstrap_lr <= 0:
         raise SystemExit("--bootstrap-lr must be positive")
 
@@ -184,6 +189,19 @@ def main():
             n_versions=args.bootstrap_versions,
             seed=args.bootstrap_seed,
         )
+        steps_per_epoch = int(np.ceil(len(frame) / args.bootstrap_batch_size))
+        estimated_steps = (
+            int(args.bootstrap_versions)
+            * int(args.bootstrap_epochs_per_version)
+            * steps_per_epoch
+        )
+        print(
+            "Bootstrap training budget: "
+            f"B={args.bootstrap_versions} versions × "
+            f"E={args.bootstrap_epochs_per_version} epochs/version × "
+            f"{steps_per_epoch} steps/epoch = {estimated_steps} optimizer steps",
+            flush=True,
+        )
 
         # Fit the dimension-reduction basis once, before any bootstrap training.
         reference_h = extract_concept_embedding_matrix(
@@ -209,15 +227,16 @@ def main():
                 [p for p in bootstrap_lm.parameters() if p.requires_grad],
                 lr=args.bootstrap_lr,
             )
-            stats = train_bootstrap_version(
+            stats = train_bootstrap_version_epochs(
                 bootstrap_lm,
                 bootstrap_tokenizer,
                 texts,
                 bootstrap_optimizer,
-                steps=args.bootstrap_steps_per_version,
+                epochs=args.bootstrap_epochs_per_version,
                 batch_size=args.bootstrap_batch_size,
                 max_length=args.bootstrap_max_length,
                 max_grad_norm=cfg.grpo.max_grad_norm,
+                shuffle_seed=args.bootstrap_seed + b * 1000,
             )
             h_full = extract_concept_embedding_matrix(
                 bootstrap_lm, bootstrap_tokenizer, vocab.concept_texts
@@ -249,7 +268,12 @@ def main():
                 "representation_projection": "fixed_pretraining_PCA",
                 "representation_dim": int(args.bootstrap_representation_dim),
                 "bootstrap_docs": int(len(frame)),
-                "steps_per_version": int(args.bootstrap_steps_per_version),
+                "epochs_per_version": int(args.bootstrap_epochs_per_version),
+                "estimated_optimizer_steps": int(
+                    args.bootstrap_versions
+                    * args.bootstrap_epochs_per_version
+                    * np.ceil(len(frame) / args.bootstrap_batch_size)
+                ),
             },
         )
         print(f"Saved fixed bootstrap bundle {list(H.shape)} -> {bundle_path}", flush=True)
