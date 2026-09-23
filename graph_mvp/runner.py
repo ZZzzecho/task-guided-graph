@@ -188,13 +188,21 @@ class GraphPhaseRunner:
 
     def run(self, initial_state, reward_context, validation_context,
             phases=4, policy_updates_per_phase=4, num_candidates=8,
-            on_phase: Callable | None = None):
+            on_phase: Callable | None = None,
+            progress_callback: Callable | None = None):
         if phases < 0 or policy_updates_per_phase < 1 or num_candidates < 1:
             raise ValueError("Invalid graph-phase budget")
         state = initial_state
         records = []
         for phase in range(phases):
             phase_start = time.perf_counter()
+            if progress_callback is not None:
+                progress_callback({
+                    "stage": "phase_start",
+                    "phase": phase + 1,
+                    "total_phases": phases,
+                    "state_id": state.state_id,
+                })
             parent = state
             reward_baseline = self.reward_evaluator.evaluate_snapshot(state.snapshot, reward_context)
             validation_baseline = self.validation_evaluator.evaluate_snapshot(state.snapshot, validation_context)
@@ -202,17 +210,55 @@ class GraphPhaseRunner:
             best = None  # (reward, candidate)
             for update_index in range(policy_updates_per_phase):
                 update_start = time.perf_counter()
+                if progress_callback is not None:
+                    progress_callback({
+                        "stage": "grpo_update_start",
+                        "phase": phase + 1,
+                        "total_phases": phases,
+                        "update": update_index + 1,
+                        "total_updates": policy_updates_per_phase,
+                    })
                 calls = self.graph_env.solver.solve_calls
                 inp = self._build_input(state, reward_context, reward_baseline)
                 actions = self.policy.sample(inp, num_candidates)
                 ids = [a.candidate_id for a in actions]
                 if len(ids) != len(set(ids)):
                     raise ValueError("Policy produced duplicate candidate IDs")
-                candidates = [self.graph_env.step(state, a) for a in actions]
+                candidates = []
+                for candidate_index, action in enumerate(actions, start=1):
+                    if progress_callback is not None:
+                        progress_callback({
+                            "stage": "candidate_start",
+                            "phase": phase + 1,
+                            "total_phases": phases,
+                            "update": update_index + 1,
+                            "total_updates": policy_updates_per_phase,
+                            "candidate": candidate_index,
+                            "total_candidates": len(actions),
+                            "candidate_id": action.candidate_id,
+                        })
+                    def solver_progress(info, _ci=candidate_index, _action=action):
+                        if progress_callback is not None:
+                            payload = dict(info)
+                            payload.update({
+                                "stage": f"candidate_{payload.get('stage', 'solver')}",
+                                "phase": phase + 1,
+                                "total_phases": phases,
+                                "update": update_index + 1,
+                                "total_updates": policy_updates_per_phase,
+                                "candidate": _ci,
+                                "total_candidates": len(actions),
+                                "candidate_id": _action.candidate_id,
+                            })
+                            progress_callback(payload)
+                    candidate = self.graph_env.step(
+                        state, action, progress_callback=solver_progress
+                    )
+                    candidates.append(candidate)
                 evaluations, rewards, experiences = [], [], []
                 features = {f.edge: f.vector() for f in inp.candidate_edges}
                 feature_objects = {f.edge: f for f in inp.candidate_edges}
-                for candidate, action in zip(candidates, actions):
+                for candidate_index, (candidate, action) in enumerate(zip(candidates, actions), start=1):
                     evaluation = None
                     if not candidate.valid:
                         reward = self.reward_fn.invalid(candidate.candidate_id, candidate.error)
@@ -224,11 +270,35 @@ class GraphPhaseRunner:
                             reward = self.reward_fn.invalid(candidate.candidate_id, str(exc))
                     evaluations.append(evaluation)
                     rewards.append(reward)
+                    if progress_callback is not None:
+                        progress_callback({
+                            "stage": "candidate_done",
+                            "phase": phase + 1,
+                            "total_phases": phases,
+                            "update": update_index + 1,
+                            "total_updates": policy_updates_per_phase,
+                            "candidate": candidate_index,
+                            "total_candidates": len(candidates),
+                            "candidate_id": candidate.candidate_id,
+                            "valid": bool(candidate.valid and reward.valid),
+                            "reward": float(reward.reward),
+                            "delta_task": float(reward.delta_task),
+                        })
                     experiences.append(TrainingRunner._experience(
                         state.state_id, candidate, action, reward, features))
                     if candidate.valid and reward.valid and (best is None or reward.reward > best[0]):
                         best = (reward.reward, candidate)
                 policy_update = self.policy.update(experiences)
+                if progress_callback is not None:
+                    progress_callback({
+                        "stage": "grpo_update_done",
+                        "phase": phase + 1,
+                        "total_phases": phases,
+                        "update": update_index + 1,
+                        "total_updates": policy_updates_per_phase,
+                        "policy_update": policy_update,
+                        "elapsed_seconds": time.perf_counter() - update_start,
+                    })
                 selected_edge_features = []
                 for action in actions:
                     rows = []
