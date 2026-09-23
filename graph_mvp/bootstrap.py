@@ -284,3 +284,34 @@ def make_shuffled_versions_frame(frame, text_col="text", n_versions=4, seed=123)
         shuffled = splittext.apply(lambda xs: shuffle_sentences(xs, rng))
         versions.append(tuple(shuffled.apply(lambda xs: " ".join(x for x in xs if x)).tolist()))
     return tuple(versions)
+
+
+def capture_trainable_state(model):
+    """Clone trainable parameters so every bootstrap version can share one start."""
+    try:
+        import torch
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("Bootstrap state capture requires PyTorch") from exc
+    state = {}
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            state[name] = param.detach().cpu().clone()
+    if not state:
+        raise ValueError("model has no trainable bootstrap parameters")
+    return state
+
+
+def restore_trainable_state(model, state):
+    """Restore a previously captured trainable-parameter state in place."""
+    named = dict(model.named_parameters())
+    if set(state) - set(named):
+        raise ValueError("bootstrap trainable state does not match model")
+    with _torch_no_grad():
+        for name, value in state.items():
+            param = named[name]
+            param.copy_(value.to(device=param.device, dtype=param.dtype))
+
+
+def _torch_no_grad():
+    import torch
+    return torch.no_grad()
