@@ -74,12 +74,12 @@ class GraphEnvironment:
         self.solver = estimator if estimator is not None else (solver if solver is not None else WeightedGraphicalLasso())
         self.config = config
 
-    def initialize(self, S, penalty, concept_ids, state_id="state-0"):
+    def initialize(self, S, penalty, concept_ids, state_id="state-0", progress_callback=None):
         if self.estimator is not None:
             raise ValueError("Bound-estimator environment must use initialize_from_estimator")
         lam = penalty_matrix(len(concept_ids), penalty)
         self._check_bounds(lam)
-        result = self.solver.solve(S, lam)
+        result = self.solver.solve(S, lam, progress_callback=progress_callback)
         if not result.converged:
             raise RuntimeError(f"Initial graph solve failed: {result.message}")
         snapshot = GraphSnapshot(tuple(concept_ids), S, lam, result.Theta,
@@ -91,12 +91,12 @@ class GraphEnvironment:
             raise ValueError("Initial graph exceeds max_density")
         return GraphState(state_id, 0, snapshot, result.info())
 
-    def initialize_from_estimator(self, penalty, concept_ids, state_id="state-0"):
+    def initialize_from_estimator(self, penalty, concept_ids, state_id="state-0", progress_callback=None):
         if self.estimator is None:
             raise ValueError("No bound graph estimator")
         lam = penalty_matrix(len(concept_ids), penalty)
         self._check_bounds(lam)
-        result = self.estimator.solve(lam)
+        result = self.estimator.solve(lam, progress_callback=progress_callback)
         if not result.converged:
             raise RuntimeError(f"Initial graph solve failed: {result.message}")
         snapshot = self._snapshot_from_estimator_result(tuple(concept_ids), lam, result)
@@ -143,7 +143,7 @@ class GraphEnvironment:
                 lam[i, j] = lam[j, i] = np.clip(value, self.config.lambda_min, self.config.lambda_max)
         return lam
 
-    def step(self, state: GraphState, action: ActionRecord | ActionGroup):
+    def step(self, state: GraphState, action: ActionRecord | ActionGroup, progress_callback=None):
         parent = state.snapshot
         if parent.adjacency_threshold != self.config.adjacency_threshold:
             raise ValueError("Adjacency threshold cannot change during a search")
@@ -155,7 +155,10 @@ class GraphEnvironment:
         else:
             try:
                 if self.estimator is None:
-                    result = self.solver.solve(parent.S, lam, initial_theta=parent.Theta)
+                    result = self.solver.solve(
+                        parent.S, lam, initial_theta=parent.Theta,
+                        progress_callback=progress_callback
+                    )
                     info = result.info()
                     if not result.converged:
                         return GraphCandidate(action.candidate_id, state.state_id, None, action,
@@ -169,8 +172,12 @@ class GraphEnvironment:
                     if parent.estimator_kind != self.estimator.kind:
                         raise ValueError("State estimator kind does not match bound estimator")
                     repr_precision = parent.auxiliary.get("representation_precision")
-                    result = self.estimator.solve(lam, initial_theta=parent.Theta,
-                                                  initial_representation_precision=repr_precision)
+                    result = self.estimator.solve(
+                        lam,
+                        initial_theta=parent.Theta,
+                        initial_representation_precision=repr_precision,
+                        progress_callback=progress_callback,
+                    )
                     info = result.info()
                     if not result.converged:
                         return GraphCandidate(action.candidate_id, state.state_id, None, action,
