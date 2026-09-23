@@ -100,6 +100,7 @@ python scripts/build_patient_matrices.py \
   --output data/patents_h04l/cache_smoke \
   --dtype bfloat16 \
   --cache-dtype float16 \
+  --representation-dim 64 \
   --batch-size 4 \
   --shard-size 16 \
   --max-patients 32
@@ -110,3 +111,32 @@ input contract is only a text column, so it is valid for patents.
 
 The citation-retrieval Graph-RL evaluator is a separate downstream adapter and is
 not the old binary HOME/ADMITTED evaluator.
+
+
+## Representation dimension for Patent-MNGM
+
+The patent mainline uses `R=64` for MNGM, matching the scale of the original
+GRIAN/MNGM experiments.
+
+Important: Qwen3-Embedding still computes token states and concept-conditioned
+attention in its full hidden space. Only the final concept-specific vector
+`h_dj` is reduced before caching:
+
+```text
+Qwen token states [L,1024]
+        +
+concept prototype [1024]
+        ↓
+full-space cosine + token softmax
+        ↓
+h_dj [1024]
+        ↓
+Qwen3 MRL-style first 64 dims + L2 normalize
+        ↓
+h_tilde_dj [64]
+        ↓
+H_d [64,800]
+```
+
+Thus the reduction changes only the statistical MNGM representation axis; it does
+not change downstream GLM hidden size or graph-token output dimension.
