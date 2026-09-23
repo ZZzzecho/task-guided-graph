@@ -5,8 +5,10 @@ Qwen3-Embedding-0.6B supplies:
 - official last-token pooled concept prototypes [P,1024];
 - final-layer contextual patient token states [B,L,1024].
 
-Concept-conditioned token attention produces H_d [1024,P].  H_d is cached once and
-never refreshed during Graph-RL.
+Concept-conditioned token attention is computed in the encoder's full hidden space.
+Optionally, the resulting concept vectors are reduced with Qwen3-Embedding's
+MRL-style prefix truncation + L2 normalization before being cached for MNGM.
+H_d is cached once and never refreshed during Graph-RL.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from typing import Iterable, Sequence
 import numpy as np
 
 DEFAULT_PATIENT_ENCODER = "Qwen/Qwen3-Embedding-0.6B"
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 
 
 def _torch():
@@ -241,9 +243,16 @@ def build_concept_prototypes(encoder: Qwen3EmbeddingEncoder, vocabulary: Concept
 
 
 class PatientConceptMatrixBuilder:
-    """Vectorized cosine + token-softmax builder for H_d [D,P]."""
+    """Vectorized cosine + token-softmax builder for H_d [R,P].
 
-    def __init__(self, encoder, concept_prototypes, *, temperature=0.1):
+    Attention is always computed in the full encoder/prototype space D.  When
+    representation_dim is set, the weighted concept vectors are truncated to the
+    first R dimensions and L2-normalized along the representation axis, matching
+    the MRL-style dimensionality reduction used by Qwen3-Embedding.
+    """
+
+    def __init__(self, encoder, concept_prototypes, *, temperature=0.1,
+                 representation_dim=None):
         torch, F = _torch()
         p = torch.as_tensor(concept_prototypes, dtype=torch.float32)
         if p.ndim != 2 or p.shape[0] < 2 or p.shape[1] < 2 or not torch.isfinite(p).all():
@@ -252,9 +261,21 @@ class PatientConceptMatrixBuilder:
             raise ValueError("temperature must be positive")
         if hasattr(encoder, "hidden_size") and int(encoder.hidden_size) != int(p.shape[1]):
             raise ValueError("Prototype dimension does not match encoder hidden size")
+        input_dim = int(p.shape[1])
+        if representation_dim is None:
+            output_dim = input_dim
+        else:
+            if not isinstance(representation_dim, int) or representation_dim < 2:
+                raise ValueError("representation_dim must be None or an integer >=2")
+            if representation_dim > input_dim:
+                raise ValueError("representation_dim cannot exceed encoder hidden size")
+            output_dim = int(representation_dim)
         self.encoder = encoder
         self.prototypes = p
         self.temperature = float(temperature)
+        self.encoder_hidden_size = input_dim
+        self.representation_dim = output_dim
+        self.use_mrl_reduction = representation_dim is not None
         self._F = F
 
     @property
@@ -263,14 +284,15 @@ class PatientConceptMatrixBuilder:
 
     @property
     def hidden_size(self):
-        return int(self.prototypes.shape[1])
+        """Backward-compatible name for the cached MNGM representation dimension."""
+        return int(self.representation_dim)
 
     def from_hidden_states(self, token_states, attention_mask):
         """Build [B,D,P] matrices from final token states [B,L,D]."""
         torch, F = _torch()
         z = token_states
         mask = torch.as_tensor(attention_mask, dtype=torch.bool, device=z.device)
-        if z.ndim != 3 or z.shape[-1] != self.hidden_size or mask.shape != z.shape[:2]:
+        if z.ndim != 3 or z.shape[-1] != self.encoder_hidden_size or mask.shape != z.shape[:2]:
             raise ValueError("token_states [B,L,D] / attention_mask [B,L] shape mismatch")
         if not torch.all(mask.any(dim=1)):
             raise ValueError("Each patient must contain at least one active token")
@@ -280,8 +302,16 @@ class PatientConceptMatrixBuilder:
         sim = torch.einsum("bld,pd->blp", z_norm, p_norm)
         sim = sim.masked_fill(~mask.unsqueeze(-1), float("-inf"))
         alpha = torch.softmax(sim / self.temperature, dim=1)
-        # Weighted sum of original contextual states; output [B,D,P].
-        h = torch.einsum("blp,bld->bdp", alpha, z)
+        # Weighted sum is first formed in the full encoder space [B,D,P].
+        h_full = torch.einsum("blp,bld->bdp", alpha, z)
+        if self.use_mrl_reduction:
+            # Qwen3-Embedding MRL-style reduction: prefix truncation followed by
+            # L2 normalization.  Attention itself remains in the full D-dimensional
+            # space, so only the MNGM representation axis is reduced.
+            h = h_full[:, :self.representation_dim, :]
+            h = F.normalize(h, p=2, dim=1)
+        else:
+            h = h_full
         return h, alpha
 
     def encode(self, texts):
@@ -305,6 +335,7 @@ class PatientMatrixCacheWriter:
 
     def __init__(self, output_dir, concept_ids: Sequence[str], hidden_size: int, *,
                  dtype="float16", encoder_id=DEFAULT_PATIENT_ENCODER, temperature=0.1,
+                 encoder_hidden_size=None, representation_reduction="none",
                  overwrite=False):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -318,6 +349,10 @@ class PatientMatrixCacheWriter:
         self.hidden_size = int(hidden_size)
         self.encoder_id = str(encoder_id)
         self.temperature = float(temperature)
+        self.encoder_hidden_size = (
+            int(encoder_hidden_size) if encoder_hidden_size is not None else self.hidden_size
+        )
+        self.representation_reduction = str(representation_reduction)
         self.shards = []
         self.n_samples = 0
 
@@ -350,6 +385,9 @@ class PatientMatrixCacheWriter:
             "shape_semantics": ["patient", "representation_dim", "concept"],
             "n_samples": self.n_samples,
             "hidden_size": self.hidden_size,
+            "representation_dim": self.hidden_size,
+            "encoder_hidden_size": self.encoder_hidden_size,
+            "representation_reduction": self.representation_reduction,
             "num_concepts": len(self.concept_ids),
             "concept_ids": list(self.concept_ids),
             "dtype": self.dtype.name,
@@ -437,7 +475,12 @@ def build_patient_cache_from_frame(frame, builder: PatientConceptMatrixBuilder, 
         raise ValueError("batch_size and shard_size must be positive")
     writer = PatientMatrixCacheWriter(
         output_dir, concept_ids, builder.hidden_size, dtype=cache_dtype,
-        encoder_id=encoder_id, temperature=builder.temperature, overwrite=overwrite)
+        encoder_id=encoder_id, temperature=builder.temperature,
+        encoder_hidden_size=builder.encoder_hidden_size,
+        representation_reduction=(
+            "qwen3_mrl_prefix_l2" if builder.use_mrl_reduction else "none"
+        ),
+        overwrite=overwrite)
     matrix_buffer, subject_buffer, stay_buffer = [], [], []
     for start in range(0, len(frame), batch_size):
         batch = frame.iloc[start:start + batch_size]
