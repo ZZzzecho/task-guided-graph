@@ -203,11 +203,20 @@ class GRPOPolicy(BaselinePolicy):
                 direction = int(torch.multinomial(torch.exp(dir_log_probs), 1,
                                                   replacement=True,
                                                   generator=self._generator).item())
-                component = float((sel_log_probs[index] + dir_log_probs[direction]).cpu())
+                selection_lp = float(sel_log_probs[index].cpu())
+                direction_lp = float(dir_log_probs[direction].cpu())
+                component = selection_lp + direction_lp
                 action_name = BATCH_DIRECTIONS[direction]
-                records.append(ActionRecord(candidate_id, policy_input.state_id,
-                                            edges[index].edge, action_name, component,
-                                            self.version))
+                records.append(ActionRecord(
+                    candidate_id,
+                    policy_input.state_id,
+                    edges[index].edge,
+                    action_name,
+                    component,
+                    self.version,
+                    selection_log_prob=selection_lp,
+                    direction_log_prob=direction_lp,
+                ))
                 selected.append(index)
                 directions.append(direction)
                 joint_log_prob += component
