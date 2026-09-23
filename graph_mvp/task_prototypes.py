@@ -42,8 +42,9 @@ def build_task_soft_graph_tokenizer(model, tokenizer, concept_texts, *, num_toke
     """Construct SoftGraphTokenizer in the task model's own embedding space."""
     from .graph_tokens import SoftGraphTokenizer
     prototypes = task_lm_concept_prototypes(model, tokenizer, concept_texts)
-    output_dim = int(model.get_input_embeddings().weight.shape[-1])
-    return SoftGraphTokenizer(
+    embedding = model.get_input_embeddings()
+    output_dim = int(embedding.weight.shape[-1])
+    tokenizer_module = SoftGraphTokenizer(
         prototypes,
         output_dim=output_dim,
         num_tokens=num_tokens,
@@ -51,3 +52,14 @@ def build_task_soft_graph_tokenizer(model, tokenizer, concept_texts, *, num_toke
         activation_tau=activation_tau,
         activation_normalization=activation_normalization,
     )
+    # Match the task LM entry embedding exactly. This is required for BF16/FP16
+    # models because SoftGraphTokenizer parameters are initialized in FP32.
+    try:
+        if embedding.weight.device.type != "meta":
+            tokenizer_module = tokenizer_module.to(
+                device=embedding.weight.device,
+                dtype=embedding.weight.dtype,
+            )
+    except AttributeError:
+        pass
+    return tokenizer_module
