@@ -35,6 +35,10 @@ from graph_mvp.retrieval_task import (
 
 
 def _jsonable(value):
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, set):
+        return sorted(_jsonable(v) for v in value)
     if is_dataclass(value):
         return {k: _jsonable(v) for k, v in asdict(value).items()}
     if isinstance(value, Mapping):
