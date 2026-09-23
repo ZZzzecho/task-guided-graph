@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
+import time
 import numpy as np
 
 from .types import (GraphState, GraphCandidate, PolicyExperience,
@@ -117,6 +118,8 @@ class PhaseUpdateRecord:
     rewards: tuple[RewardRecord, ...]
     policy_update: dict
     solver_calls: int
+    selected_edge_features: tuple = ()
+    elapsed_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -132,6 +135,8 @@ class GraphPhaseRecord:
     acceptance_reason: str
     adapted: bool
     post_adaptation_validation: TaskMetrics | None = None
+    adaptation_result: object | None = None
+    elapsed_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -189,12 +194,14 @@ class GraphPhaseRunner:
         state = initial_state
         records = []
         for phase in range(phases):
+            phase_start = time.perf_counter()
             parent = state
             reward_baseline = self.reward_evaluator.evaluate_snapshot(state.snapshot, reward_context)
             validation_baseline = self.validation_evaluator.evaluate_snapshot(state.snapshot, validation_context)
             update_records = []
             best = None  # (reward, candidate)
             for update_index in range(policy_updates_per_phase):
+                update_start = time.perf_counter()
                 calls = self.graph_env.solver.solve_calls
                 inp = self._build_input(state, reward_context, reward_baseline)
                 actions = self.policy.sample(inp, num_candidates)
@@ -204,6 +211,7 @@ class GraphPhaseRunner:
                 candidates = [self.graph_env.step(state, a) for a in actions]
                 evaluations, rewards, experiences = [], [], []
                 features = {f.edge: f.vector() for f in inp.candidate_edges}
+                feature_objects = {f.edge: f for f in inp.candidate_edges}
                 for candidate, action in zip(candidates, actions):
                     evaluation = None
                     if not candidate.valid:
@@ -221,15 +229,43 @@ class GraphPhaseRunner:
                     if candidate.valid and reward.valid and (best is None or reward.reward > best[0]):
                         best = (reward.reward, candidate)
                 policy_update = self.policy.update(experiences)
+                selected_edge_features = []
+                for action in actions:
+                    rows = []
+                    action_rows = action.actions if isinstance(action, ActionGroup) else (action,)
+                    for record in action_rows:
+                        feat = feature_objects.get(record.edge)
+                        if feat is None:
+                            continue
+                        rows.append({
+                            "edge": tuple(record.edge),
+                            "partial_corr": float(feat.partial_corr),
+                            "abs_partial_corr": float(feat.abs_partial_corr),
+                            "penalty": float(feat.penalty),
+                            "edge_exists": bool(feat.edge_exists),
+                            "uncertainty": feat.uncertainty,
+                            "task_relevance": feat.task_relevance,
+                            "previous_reward": feat.previous_reward,
+                            "frontier_score": float(feat.frontier_score),
+                            "degree_i": float(feat.degree_i),
+                            "degree_j": float(feat.degree_j),
+                        })
+                    selected_edge_features.append({
+                        "candidate_id": action.candidate_id,
+                        "edges": tuple(rows),
+                    })
                 update_records.append(PhaseUpdateRecord(
                     update_index, tuple(candidates), tuple(evaluations), tuple(rewards),
-                    policy_update, self.graph_env.solver.solve_calls - calls))
+                    policy_update, self.graph_env.solver.solve_calls - calls,
+                    tuple(selected_edge_features),
+                    time.perf_counter() - update_start))
 
             proposal = None if best is None else best[1]
             validation_proposal = None
             accepted = False
             adapted = False
             post_adaptation_validation = None
+            adaptation_result = None
             if proposal is None:
                 reason = "No valid reward-panel proposal"
             else:
@@ -246,7 +282,7 @@ class GraphPhaseRunner:
             if accepted:
                 state = promote_candidate_to_state(state, proposal)
                 if self.task_adapter is not None:
-                    self.task_adapter(state)
+                    adaptation_result = self.task_adapter(state)
                     adapted = True
                     # Acceptance itself is intentionally based on the frozen-model
                     # graph comparison above. Record the post-adaptation metric
@@ -258,7 +294,8 @@ class GraphPhaseRunner:
                 phase, parent.state_id, state.state_id, tuple(update_records),
                 None if proposal is None else proposal.candidate_id,
                 validation_baseline, validation_proposal, accepted, reason, adapted,
-                post_adaptation_validation)
+                post_adaptation_validation, adaptation_result,
+                time.perf_counter() - phase_start)
             records.append(record)
             if on_phase:
                 on_phase(record)
