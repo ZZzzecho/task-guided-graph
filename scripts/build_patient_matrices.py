@@ -43,6 +43,16 @@ def main():
     p.add_argument("--shard-size", type=int, default=16)
     p.add_argument("--temperature", type=float, default=0.1)
     p.add_argument(
+        "--representation-dim",
+        type=int,
+        default=None,
+        help=(
+            "Optional cached MNGM representation dimension. Attention remains in "
+            "the full encoder space; output concept vectors use prefix truncation "
+            "+ L2 normalization (Qwen3-Embedding MRL style)."
+        ),
+    )
+    p.add_argument(
         "--max-patients",
         type=int,
         default=None,
@@ -90,6 +100,7 @@ def main():
         encoder,
         prototypes,
         temperature=args.temperature,
+        representation_dim=args.representation_dim,
     )
 
     if args.id_col is not None:
