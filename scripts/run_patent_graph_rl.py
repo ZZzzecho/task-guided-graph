@@ -275,10 +275,6 @@ def main():
         pool_path=args.val_pools, max_queries=args.max_val_queries, **common
     )
     test_ctx = None
-    if args.test_pools is not None:
-        test_ctx = load_retrieval_context(
-            pool_path=args.test_pools, max_queries=args.max_test_queries, **common
-        )
 
     evaluator = FrozenGraphRetrievalEvaluator(
         model, candidate_batch_size=args.candidate_batch_size
@@ -286,9 +282,6 @@ def main():
     for name, ctx in (("train", train_ctx), ("graph", graph_ctx), ("val", val_ctx)):
         prep = evaluator.prepare(ctx)
         print(f"candidate-index {name}: {prep}", flush=True)
-    if test_ctx is not None:
-        prep = evaluator.prepare(test_ctx)
-        print(f"candidate-index test(final-only): {prep}", flush=True)
 
     import torch
     trainable = [p for p in model.parameters() if p.requires_grad]
@@ -440,6 +433,16 @@ def main():
 
     final_graph = evaluator.evaluate_snapshot(result.final_state.snapshot, graph_ctx)
     final_val = evaluator.evaluate_snapshot(result.final_state.snapshot, val_ctx)
+
+    # Final-only holdout: do not read or encode test patents until graph search and
+    # accepted-graph task adaptation are completely finished.
+    if args.test_pools is not None:
+        test_ctx = load_retrieval_context(
+            pool_path=args.test_pools, max_queries=args.max_test_queries, **common
+        )
+        prep = evaluator.prepare(test_ctx)
+        print(f"candidate-index test(final-only): {prep}", flush=True)
+
     _write_json(args.output / "retrieval" / "final_graph_queries.json",
                 evaluator.score_details(result.final_state.snapshot, graph_ctx, top_k=10))
     _write_json(args.output / "retrieval" / "final_val_queries.json",
