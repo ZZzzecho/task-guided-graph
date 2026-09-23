@@ -1656,3 +1656,49 @@ E. Bootstrap embedding snapshot / PEFT embed_tokens sanity check
 2. MIMIC-IV-ED v2.2 官方说明：约 425,000 次 ED stays；`triage` 表提供 chief complaint、生命体征、pain、acuity；`edstays` 提供 disposition；`diagnosis` 提供 ED discharge ICD diagnoses。
 3. 内部设计依据：`面向下游任务的强化学习图迭代框架(1).docx`，其中保留 penalty-policy / full re-solve / acceptance 分离等原则；本文已经明确记录相对旧框架的修改。
 
+
+
+---
+
+# 22. Patent-domain executable smoke added in v0.4
+
+The first executable smoke for the Bootstrap-MNGM line reuses the H04L patent
+retrieval task so that Patient-MNGM and Bootstrap-MNGM can be compared under the
+same downstream task and the same 800-node concept universe.
+
+The smoke command is:
+
+```bash
+python scripts/run_bootstrap_patent_graph_rl.py \
+  --concepts data/patents_h04l/concepts.json \
+  --data-dir data/patents_h04l \
+  --train-pools data/patents_h04l/retrieval_train_candidates.jsonl \
+  --graph-pools data/patents_h04l/retrieval_graph_candidates.jsonl \
+  --val-pools data/patents_h04l/retrieval_val_candidates.jsonl \
+  --config configs/bootstrap_patent_glm_v0.4.json \
+  --bootstrap-model /laijizheng/models/GLM-4.7-Flash \
+  --bootstrap-local-files-only \
+  --bootstrap-versions 4 \
+  --bootstrap-docs 8 \
+  --bootstrap-steps-per-version 1 \
+  --bootstrap-batch-size 1 \
+  --bootstrap-max-length 256 \
+  --bootstrap-representation-dim 64 \
+  --task-model /laijizheng/models/GLM-4.7-Flash \
+  --task-local-files-only \
+  --max-train-queries 8 \
+  --max-reward-queries 4 \
+  --max-val-queries 4 \
+  --warmup-steps 2 \
+  --adapt-steps 2 \
+  --phases 1 \
+  --num-candidates 2 \
+  --policy-updates-per-phase 1 \
+  --output outputs/bootstrap_patent_graph_rl_smoke
+```
+
+For this smoke only, `B=4` and one ordinary-LM step per version are deliberately
+tiny. The production plan remains `B=50`. The runner saves
+`bootstrap_bundle.npz` before Graph-RL and unloads the bootstrap model before
+loading the independent task LoRA model, so the bootstrap statistical evidence is
+fixed during graph search.
