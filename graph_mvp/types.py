@@ -23,6 +23,23 @@ def freeze(value):
     return value
 
 
+def thaw(value):
+    """Recursively convert immutable/internal values into plain Python containers.
+
+    Useful for JSON/log serialization while keeping runtime contracts immutable.
+    Arrays are converted to lists and NumPy scalars to native Python scalars.
+    """
+    if isinstance(value, Mapping):
+        return {k: thaw(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [thaw(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 def symmetric_matrix(value, name, p=None):
     a = np.asarray(value, dtype=float)
     if a.ndim != 2 or a.shape[0] != a.shape[1] or a.shape[0] < 2:
