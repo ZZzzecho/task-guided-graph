@@ -16,6 +16,9 @@ from typing import Mapping, Any
 import numpy as np
 from scipy.special import ndtri
 from scipy.stats import rankdata
+import warnings
+from sklearn.covariance import graphical_lasso
+from sklearn.exceptions import ConvergenceWarning
 
 from .config import DataConfig, MNGMConfig, SolverConfig
 from .data import RankGaussianTransformer, training_covariance
@@ -179,8 +182,11 @@ class MNGMEstimator:
     Compared with the original `bigraph_phy.py` prototype, this implementation:
     - preserves its Gaussian-copula / alternating A-B idea;
     - fixes matrix-cell flattening so block semantics are explicit;
-    - feeds effective covariance matrices directly to the weighted GLASSO solver
-      instead of calling sklearn.GraphicalLasso.fit(covariance_as_observations);
+    - feeds effective covariance matrices directly into graphical-lasso objectives
+      instead of calling GraphicalLasso.fit(covariance_as_observations);
+    - uses the custom weighted solver only on the concept axis, where GRPO needs
+      edge-specific penalties; the representation axis uses sklearn graphical_lasso
+      with a scalar penalty and coordinate descent;
     - supports an edge-specific concept penalty matrix for GRPO;
     - avoids the original min-max normalization of covariance entries;
     - has no mandatory CUDA/numba dependency.
@@ -200,7 +206,8 @@ class MNGMEstimator:
         self.sample_semantics = "patient" if mode == PATIENT_MATRIX_MODE else "bootstrap"
         self.data_fingerprint = _fingerprint_array(x, mode)
         self.concept_solver = WeightedGraphicalLasso(solver_config)
-        self.representation_solver = WeightedGraphicalLasso(solver_config)
+        self.solver_config = solver_config
+        self.representation_solve_calls = 0
         self.solve_calls = 0
         if config.transform == "rank_gaussian":
             self.transformed = readonly(_rank_gaussian_tensor(x))
@@ -232,6 +239,81 @@ class MNGMEstimator:
             r4 = self.latent_correlation.reshape(self.r, self.p, self.r, self.p)
             s = np.einsum("ij,aibj->ab", a, r4, optimize=True) / self.p
         return _psd_ridge(s, self.config.covariance_ridge, self.config.min_eig)
+
+    def _solve_representation_scalar(self, covariance, progress_callback=None):
+        """Solve the scalar-penalty representation graph with sklearn GLasso.
+
+        sklearn's objective penalizes the sum over all off-diagonal entries, so a
+        symmetric edge is counted twice.  Our project convention stores lambda once
+        per undirected edge (upper triangle), hence alpha=lambda/2 matches the same
+        objective.
+        """
+        s = symmetric_matrix(covariance, "representation_covariance", self.r)
+        alpha = float(self.config.representation_penalty) / 2.0
+        self.representation_solve_calls += 1
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", ConvergenceWarning)
+                cov_est, precision, costs, n_iter = graphical_lasso(
+                    emp_cov=s,
+                    alpha=alpha,
+                    mode="cd",
+                    tol=max(float(self.solver_config.kkt_tol), 1e-6),
+                    enet_tol=min(1e-4, max(float(self.solver_config.kkt_tol) / 10.0, 1e-8)),
+                    max_iter=min(int(self.solver_config.max_iter), 500),
+                    verbose=False,
+                    return_costs=True,
+                    return_n_iter=True,
+                )
+        except (ConvergenceWarning, FloatingPointError, np.linalg.LinAlgError) as exc:
+            return None, {
+                "converged": False,
+                "iterations": None,
+                "message": f"sklearn graphical_lasso failed: {exc}",
+                "alpha": alpha,
+                "solver": "sklearn_graphical_lasso_cd",
+            }
+        precision = _symmetrize(np.asarray(precision, dtype=float))
+        try:
+            mineig = float(np.linalg.eigvalsh(precision)[0])
+        except np.linalg.LinAlgError:
+            mineig = float("nan")
+        if not np.isfinite(precision).all() or not np.isfinite(mineig) or mineig <= 0:
+            return None, {
+                "converged": False,
+                "iterations": int(n_iter),
+                "message": "sklearn graphical_lasso returned non-SPD precision",
+                "alpha": alpha,
+                "solver": "sklearn_graphical_lasso_cd",
+                "min_eigenvalue": mineig,
+            }
+        final_cost = None
+        final_dual_gap = None
+        if costs:
+            try:
+                final_cost = float(costs[-1][0])
+                final_dual_gap = float(costs[-1][1])
+            except (TypeError, ValueError, IndexError):
+                pass
+        if progress_callback is not None:
+            progress_callback({
+                "stage": "representation_glasso",
+                "iteration": int(n_iter),
+                "max_iter": min(int(self.solver_config.max_iter), 500),
+                "dimension": int(self.r),
+                "primal": float("nan"),
+                "dual": 0.0 if final_dual_gap is None else abs(final_dual_gap),
+            })
+        return precision, {
+            "converged": True,
+            "iterations": int(n_iter),
+            "message": "converged",
+            "alpha": alpha,
+            "solver": "sklearn_graphical_lasso_cd",
+            "final_cost": final_cost,
+            "final_dual_gap": final_dual_gap,
+            "min_eigenvalue": mineig,
+        }
 
     def _normalize_representation_precision(self, b):
         if self.config.scale_constraint == "trace":
@@ -267,7 +349,7 @@ class MNGMEstimator:
         np.linalg.cholesky(b)
         b, _ = self._normalize_representation_precision(b)
         self.solve_calls += 1
-        start_inner_calls = self.concept_solver.solve_calls + self.representation_solver.solve_calls
+        start_inner_calls = self.concept_solver.solve_calls + self.representation_solve_calls
         last_sc = last_sr = None
         concept_info = representation_info = None
         for iteration in range(1, self.config.max_iter + 1):
@@ -292,23 +374,22 @@ class MNGMEstimator:
                      "sample_semantics": self.sample_semantics,
                      "representation_dim": self.r,
                      "n_samples": self.n_samples,
-                     "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solver.solve_calls - start_inner_calls})
+                     "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solve_calls - start_inner_calls})
             a_new = np.asarray(ra.Theta)
             last_sr = self._representation_covariance(a_new)
-            rb = self.representation_solver.solve(
-                last_sr, lam_b, initial_theta=b,
-                progress_callback=progress_callback, label="representation_glasso"
+            b_raw, representation_info = self._solve_representation_scalar(
+                last_sr, progress_callback=progress_callback
             )
-            representation_info = rb.info()
-            if not rb.converged:
+            if b_raw is None:
                 return EstimatorResult(None, None, False, iteration,
-                    f"representation-axis solve failed: {rb.message}", self.kind,
+                    f"representation-axis solve failed: {representation_info['message']}", self.kind,
                     {"data_fingerprint": self.data_fingerprint,
                      "sample_semantics": self.sample_semantics,
                      "representation_dim": self.r,
                      "n_samples": self.n_samples,
-                     "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solver.solve_calls - start_inner_calls})
-            b_new, scale = self._normalize_representation_precision(np.asarray(rb.Theta))
+                     "representation_solver_info": representation_info,
+                     "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solve_calls - start_inner_calls})
+            b_new, scale = self._normalize_representation_precision(np.asarray(b_raw))
             diff_a = np.linalg.norm(a_new - a, "fro") / max(1.0, np.linalg.norm(a, "fro"))
             diff_b = np.linalg.norm(b_new - b, "fro") / max(1.0, np.linalg.norm(b, "fro"))
             diff = float(diff_a + diff_b)
@@ -340,7 +421,7 @@ class MNGMEstimator:
                     "alternating_diff": diff,
                     "concept_solver_info": concept_info,
                     "representation_solver_info": representation_info,
-                    "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solver.solve_calls - start_inner_calls,
+                    "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solve_calls - start_inner_calls,
                     "stat_objective": stat,
                     "penalized_objective": stat + penalty_a + penalty_b,
                 }
@@ -353,4 +434,4 @@ class MNGMEstimator:
                                 "sample_semantics": self.sample_semantics,
                                 "representation_dim": self.r,
                                 "n_samples": self.n_samples,
-                                "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solver.solve_calls - start_inner_calls})
+                                "inner_solver_calls": self.concept_solver.solve_calls + self.representation_solve_calls - start_inner_calls})
