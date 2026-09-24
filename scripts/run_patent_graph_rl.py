@@ -153,7 +153,8 @@ def _progress_printer(info):
     if stage in ("task_warmup", "task_adapt"):
         print(
             f"[{stage}] step {info['step']}/{info['total_steps']} "
-            f"loss={info['loss']:.6f}",
+            f"loss={info['loss']:.6f} "
+            f"ma10={info.get('moving_avg_10', info['loss']):.6f}",
             flush=True,
         )
         return
