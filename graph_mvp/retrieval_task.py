@@ -515,11 +515,13 @@ def adapt_retrieval_model(
         loss_value = float(loss.detach().cpu())
         losses_out.append(loss_value)
         if progress_callback is not None:
+            window = losses_out[-min(10, len(losses_out)):]
             progress_callback({
                 "stage": str(progress_label),
                 "step": int(step_index + 1),
                 "total_steps": int(steps),
                 "loss": loss_value,
+                "moving_avg_10": float(np.mean(window)),
             })
     return {
         "steps": int(steps),
