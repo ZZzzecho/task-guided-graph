@@ -19,7 +19,7 @@ python scripts/run_patent_graph_rl.py \
   --max-val-queries 256 \
   --max-test-queries 1024 \
   --warmup-steps 50 \
-  --adapt-steps 30 \
+  --adapt-steps 100 \
   --phases 8 \
   --policy-updates-per-phase 3 \
   --num-candidates 8 \
