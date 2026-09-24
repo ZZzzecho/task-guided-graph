@@ -11,7 +11,7 @@ import platform
 from pathlib import Path
 import subprocess
 import time
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from collections.abc import Mapping
 import numpy as np
 
@@ -40,7 +40,12 @@ def _jsonable(value):
     if isinstance(value, set):
         return sorted(_jsonable(v) for v in value)
     if is_dataclass(value):
-        return {k: _jsonable(v) for k, v in asdict(value).items()}
+        # Avoid dataclasses.asdict(): it deep-copies fields and fails on
+        # MappingProxyType used by immutable graph/estimator metadata.
+        return {
+            field.name: _jsonable(getattr(value, field.name))
+            for field in fields(value)
+        }
     if isinstance(value, Mapping):
         return {str(k): _jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -64,6 +69,20 @@ def _append_jsonl(path, value):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(_jsonable(value), ensure_ascii=False, allow_nan=False) + "\n")
+
+
+def _safe_analysis_log(label, fn):
+    """Do not terminate a long training run because an analysis log failed."""
+    try:
+        fn()
+        return True
+    except Exception as exc:
+        print(
+            f"[analysis-log warning] {label} failed: "
+            f"{type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        return False
 
 
 def _file_sha256(path):
@@ -456,6 +475,46 @@ def main():
             f"reason={record.acceptance_reason}",
             flush=True,
         )
+        # Persist the expensive phase result before writing detailed analysis
+        # logs. A serialization-only failure must never discard a completed phase.
+        proposal = None
+        if record.proposal_id is not None:
+            for update in record.updates:
+                for candidate in update.candidates:
+                    if candidate.candidate_id == record.proposal_id:
+                        proposal = candidate
+                        break
+                if proposal is not None:
+                    break
+        ckpt = args.output / "checkpoints" / f"phase_{record.phase:03d}"
+        ckpt.mkdir(parents=True, exist_ok=True)
+        if proposal is not None and proposal.snapshot is not None:
+            np.savez_compressed(
+                ckpt / "proposal_graph.npz",
+                concept_ids=np.asarray(proposal.snapshot.concept_ids),
+                Lambda=proposal.snapshot.Lambda,
+                Theta=proposal.snapshot.Theta,
+                partial_corr=proposal.snapshot.Rho,
+            )
+        policy.save(ckpt / "graph_policy.pt")
+        torch.save(graph_tokenizer.state_dict(), ckpt / "soft_graph_tokenizer.pt")
+        if record.accepted and hasattr(task_lm, "save_pretrained"):
+            task_lm.save_pretrained(ckpt / "task_lora")
+        _write_json(ckpt / "phase_status.json", {
+            "phase": record.phase,
+            "parent_state_id": record.parent_state_id,
+            "next_state_id": record.next_state_id,
+            "proposal_id": record.proposal_id,
+            "accepted": record.accepted,
+            "acceptance_reason": record.acceptance_reason,
+            "adapted": record.adapted,
+            "elapsed_seconds": record.elapsed_seconds,
+        })
+        print(
+            f"[checkpoint] phase {record.phase + 1} saved -> {ckpt}",
+            flush=True,
+        )
+
         phase_payload = {
             "phase": record.phase,
             "parent_state_id": record.parent_state_id,
@@ -505,11 +564,18 @@ def main():
                     "selected_edge_features": feature_by_candidate.get(candidate.candidate_id, []),
                     "actions": action_rows,
                 })
-                _append_jsonl(args.output / "rl" / "candidate_trajectory.jsonl", {
-                    "phase": record.phase,
-                    "update": update.update,
-                    **candidate_rows[-1],
-                })
+                _safe_analysis_log(
+                    f"candidate trajectory phase={record.phase} update={update.update} "
+                    f"candidate={candidate.candidate_id}",
+                    lambda payload={
+                        "phase": record.phase,
+                        "update": update.update,
+                        **candidate_rows[-1],
+                    }: _append_jsonl(
+                        args.output / "rl" / "candidate_trajectory.jsonl",
+                        payload,
+                    ),
+                )
             phase_payload["updates"].append({
                 "update": update.update,
                 "elapsed_seconds": update.elapsed_seconds,
@@ -517,27 +583,13 @@ def main():
                 "policy_update": update.policy_update,
                 "candidates": candidate_rows,
             })
-        _write_json(args.output / "rl" / f"phase_{record.phase:03d}.json", phase_payload)
-
-        if record.proposal_id is not None:
-            proposal = None
-            for update in record.updates:
-                for candidate in update.candidates:
-                    if candidate.candidate_id == record.proposal_id:
-                        proposal = candidate
-                        break
-            if proposal is not None and proposal.snapshot is not None:
-                ckpt = args.output / "checkpoints" / f"phase_{record.phase:03d}"
-                ckpt.mkdir(parents=True, exist_ok=True)
-                np.savez_compressed(
-                    ckpt / "proposal_graph.npz",
-                    concept_ids=np.asarray(proposal.snapshot.concept_ids),
-                    Lambda=proposal.snapshot.Lambda,
-                    Theta=proposal.snapshot.Theta,
-                    partial_corr=proposal.snapshot.Rho,
-                )
-                policy.save(ckpt / "graph_policy.pt")
-                torch.save(graph_tokenizer.state_dict(), ckpt / "soft_graph_tokenizer.pt")
+        _safe_analysis_log(
+            f"phase JSON phase={record.phase}",
+            lambda: _write_json(
+                args.output / "rl" / f"phase_{record.phase:03d}.json",
+                phase_payload,
+            ),
+        )
 
     result = runner.run(
         state0,
