@@ -247,7 +247,7 @@ class PatientConceptMatrixBuilder:
 
     Attention is always computed in the full encoder/prototype space D.  When
     representation_dim is set, a fixed R x D projection is applied to weighted
-    concept vectors and then L2-normalized.  PCA on training concept prototypes
+    concept vectors and then L2-normalized. PCA on static concept prototypes
     supplies the default projection; an explicit matrix can also be supplied.
     """
 
@@ -277,6 +277,7 @@ class PatientConceptMatrixBuilder:
         self.encoder_hidden_size = input_dim
         self.representation_dim = output_dim
         self.use_projection = representation_dim is not None
+        self.projection_seed = int(projection_seed)
         if self.use_projection:
             if projection_matrix is None:
                 from .bootstrap import fixed_pca_projection
@@ -313,7 +314,41 @@ class PatientConceptMatrixBuilder:
         """Backward-compatible name for the cached MNGM representation dimension."""
         return int(self.representation_dim)
 
-    def from_hidden_states(self, token_states, attention_mask):
+    def projection_metadata(self):
+        """Audit the fixed projection without implying a document-PCA fit."""
+        digest = None
+        if self.use_projection:
+            digest = sha256(self.projection_mean.numpy().tobytes()
+                            + self.projection_matrix.numpy().tobytes()).hexdigest()
+        return {
+            "kind": self.projection_kind,
+            "fit_source": "static_concept_prototypes" if self.projection_kind == "prototype_pca" else None,
+            "fit_samples": self.num_concepts if self.projection_kind == "prototype_pca" else None,
+            "fit_on_document_representations": False if self.projection_kind == "prototype_pca" else None,
+            "svd_solver": "randomized" if self.projection_kind == "prototype_pca" else None,
+            "seed": self.projection_seed if self.projection_kind == "prototype_pca" else None,
+            "input_dim": self.encoder_hidden_size, "output_dim": self.hidden_size,
+            "center_before_projection": self.use_projection,
+            "per_concept_l2_after_projection": self.use_projection,
+            "l2_axis": "representation_dim" if self.use_projection else None,
+            "projection_sha256": digest,
+            "prototype_sha256": sha256(self.prototypes.numpy().tobytes()).hexdigest(),
+            "attention_space": "full_encoder_hidden",
+            "attention_softmax_axis": "active_tokens", "temperature": self.temperature,
+            "mngm_rank_gaussian_axis": "samples_for_each_representation_concept_cell",
+        }
+
+    def project_full_states(self, h_full, *, normalize=True):
+        """Fixed projection interface; expose pre-L2 output for diagnostics."""
+        torch, F = _torch()
+        if not self.use_projection:
+            return h_full
+        matrix = self.projection_matrix.to(device=h_full.device, dtype=h_full.dtype)
+        mean = self.projection_mean.to(device=h_full.device, dtype=h_full.dtype)
+        projected = torch.einsum("rd,bdp->brp", matrix, h_full - mean[None, :, None])
+        return F.normalize(projected, p=2, dim=1) if normalize else projected
+
+    def from_hidden_states(self, token_states, attention_mask, *, return_stages=False):
         """Build [B,D,P] matrices from final token states [B,L,D]."""
         torch, F = _torch()
         z = token_states
@@ -330,13 +365,11 @@ class PatientConceptMatrixBuilder:
         alpha = torch.softmax(sim / self.temperature, dim=1)
         # Weighted sum is first formed in the full encoder space [B,D,P].
         h_full = torch.einsum("blp,bld->bdp", alpha, z)
-        if self.use_projection:
-            matrix = self.projection_matrix.to(device=z.device, dtype=z.dtype)
-            mean = self.projection_mean.to(device=z.device, dtype=z.dtype)
-            h = torch.einsum("rd,bdp->brp", matrix, h_full - mean[None, :, None])
-            h = F.normalize(h, p=2, dim=1)
-        else:
-            h = h_full
+        pre_l2 = self.project_full_states(h_full, normalize=False)
+        h = F.normalize(pre_l2, p=2, dim=1) if self.use_projection else h_full
+        if return_stages:
+            return h, alpha, {"h_full": h_full, "post_projection_pre_l2": pre_l2,
+                              "post_l2": h}
         return h, alpha
 
     def encode(self, texts):
@@ -362,6 +395,7 @@ class PatientMatrixCacheWriter:
                  dtype="float16", encoder_id=DEFAULT_PATIENT_ENCODER, temperature=0.1,
                  encoder_hidden_size=None, representation_reduction="none",
                  projection_sha256=None,
+                 representation_pipeline=None,
                  overwrite=False):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -380,6 +414,7 @@ class PatientMatrixCacheWriter:
         )
         self.representation_reduction = str(representation_reduction)
         self.projection_sha256 = projection_sha256
+        self.representation_pipeline = representation_pipeline
         self.shards = []
         self.n_samples = 0
 
@@ -416,6 +451,7 @@ class PatientMatrixCacheWriter:
             "encoder_hidden_size": self.encoder_hidden_size,
             "representation_reduction": self.representation_reduction,
             "projection_sha256": self.projection_sha256,
+            "representation_pipeline": self.representation_pipeline,
             "num_concepts": len(self.concept_ids),
             "concept_ids": list(self.concept_ids),
             "dtype": self.dtype.name,
@@ -526,6 +562,7 @@ def build_patient_cache_from_frame(frame, builder: PatientConceptMatrixBuilder, 
         representation_reduction=(builder.projection_kind + "_l2"
                                   if builder.use_projection else "none"),
         projection_sha256=projection_hash,
+        representation_pipeline=builder.projection_metadata(),
         overwrite=overwrite)
     if builder.use_projection:
         np.savez_compressed(Path(output_dir) / "projection.npz",

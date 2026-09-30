@@ -41,6 +41,7 @@ from graph_mvp.retrieval_task import (
     adapt_retrieval_model,
     load_retrieval_context,
 )
+from graph_mvp.retrieval_state import RetrievalQueryStream, capture_retrieval_training_state
 
 
 def _save_graph(path, state):
@@ -306,6 +307,10 @@ def main():
     # Stage C: independent task model + retrieval Graph-RL.
     # ------------------------------------------------------------------
     import torch
+    import random
+    random.seed(cfg.runner.seed)
+    np.random.seed(cfg.runner.seed)
+    torch.manual_seed(cfg.runner.seed)
     print("Loading independent retrieval task model...", flush=True)
     task_lm, tokenizer = load_local_causal_lm(
         args.task_model,
@@ -364,6 +369,14 @@ def main():
     if not task_trainable:
         raise SystemExit("task model exposed no trainable LoRA/tokenizer parameters")
     optimizer = torch.optim.AdamW(task_trainable, lr=args.task_lr)
+    training_stream = RetrievalQueryStream(train_ctx, seed=cfg.runner.seed)
+    initial_training_state = capture_retrieval_training_state(
+        model, optimizer, training_stream,
+        candidate_encoder_fingerprint=evaluator.candidate_metadata()["fingerprint"],
+    )
+    torch.save(initial_training_state, args.output / "retrieval_initial.pt")
+    initial_trainable_fingerprint = initial_training_state["trainable_fingerprint"]
+    del initial_training_state
 
     warmup = None
     if args.warmup_steps > 0:
@@ -374,6 +387,7 @@ def main():
             train_ctx,
             optimizer,
             steps=args.warmup_steps,
+            training_stream=training_stream,
             max_grad_norm=cfg.grpo.max_grad_norm,
         )
         print(f"retrieval warmup: {warmup}", flush=True)
@@ -396,6 +410,7 @@ def main():
             train_ctx,
             optimizer,
             steps=args.adapt_steps,
+            training_stream=training_stream,
             max_grad_norm=cfg.grpo.max_grad_norm,
         )
 
@@ -438,6 +453,10 @@ def main():
 
     final_graph = evaluator.evaluate_snapshot(result.final_state.snapshot, graph_ctx)
     final_val = evaluator.evaluate_snapshot(result.final_state.snapshot, val_ctx)
+    torch.save(capture_retrieval_training_state(
+        model, optimizer, training_stream,
+        candidate_encoder_fingerprint=evaluator.candidate_metadata()["fingerprint"],
+    ), args.output / "retrieval_final.pt")
     summary = {
         "graph_estimator": "bootstrap_concept_embedding_matrix",
         "bootstrap_bundle": str(bundle_path),
@@ -451,6 +470,13 @@ def main():
         "task": "fixed-pool examiner-citation retrieval",
         "task_model": args.task_model,
         "candidate_index_frozen": True,
+        "candidate_encoder": evaluator.candidate_metadata(),
+        "task_training": {
+            "semantics": "cumulative_lora_and_optimizer_across_accepted_phases",
+            "initial_trainable_fingerprint": initial_trainable_fingerprint,
+            "initialization_seed": cfg.runner.seed,
+            "coverage": training_stream.summary(),
+        },
         "pool_size": graph_ctx.pool_size,
         "warmup": warmup,
         "phases": len(result.phases),

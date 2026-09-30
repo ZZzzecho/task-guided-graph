@@ -1,6 +1,6 @@
 """Task-guided Bootstrap-MNGM graph learning. Test data never enters graph search."""
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 from .types import (GraphSnapshot, GraphState, GraphCandidate, ActionRecord,
                     ActionGroup, GroupPolicyExperience)

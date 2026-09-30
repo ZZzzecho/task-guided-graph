@@ -143,3 +143,22 @@ def test_patient_projection_saved_with_cache(tmp_path):
     saved_mean, saved_matrix = ds.load_projection()
     np.testing.assert_array_equal(saved_mean, mean)
     np.testing.assert_array_equal(saved_matrix, matrix)
+
+
+def test_diagnostic_stages_preserve_production_projection_and_metadata():
+    builder = PatientConceptMatrixBuilder(FakeEncoder(), np.eye(4, dtype=np.float32), representation_dim=2)
+    z = torch.randn(2, 5, 4)
+    mask = torch.ones((2, 5), dtype=torch.bool)
+    h, alpha = builder.from_hidden_states(z, mask)
+    diagnostic_h, diagnostic_alpha, stages = builder.from_hidden_states(z, mask, return_stages=True)
+    torch.testing.assert_close(h, diagnostic_h, rtol=0, atol=0)
+    torch.testing.assert_close(alpha, diagnostic_alpha, rtol=0, atol=0)
+    expected = torch.einsum("rd,bdp->brp", builder.projection_matrix,
+                            stages["h_full"] - builder.projection_mean[None, :, None])
+    torch.testing.assert_close(stages["post_projection_pre_l2"], expected)
+    torch.testing.assert_close(stages["post_l2"], torch.nn.functional.normalize(expected, dim=1))
+    audit = builder.projection_metadata()
+    assert audit["fit_source"] == "static_concept_prototypes"
+    assert audit["fit_samples"] == 4 and audit["per_concept_l2_after_projection"] is True
+    assert audit["fit_on_document_representations"] is False
+    assert len(audit["projection_sha256"]) == 64

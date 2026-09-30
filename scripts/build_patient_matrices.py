@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from graph_mvp.patient_repr import (
@@ -116,6 +117,7 @@ def main():
         projection_matrix=projection_matrix,
         projection_seed=args.projection_seed,
     )
+    print("representation pipeline: " + json.dumps(builder.projection_metadata(), sort_keys=True), flush=True)
 
     if args.id_col is not None:
         if args.id_col not in frame.columns:

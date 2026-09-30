@@ -31,6 +31,7 @@ from graph_mvp.retrieval_task import (
     adapt_retrieval_model,
     load_retrieval_context,
 )
+from graph_mvp.retrieval_state import RetrievalQueryStream, capture_retrieval_training_state
 
 
 
@@ -154,7 +155,8 @@ def _progress_printer(info):
         print(
             f"[{stage}] step {info['step']}/{info['total_steps']} "
             f"loss={info['loss']:.6f} "
-            f"ma10={info.get('moving_avg_10', info['loss']):.6f}",
+            f"ma10={info.get('moving_avg_10', info['loss']):.6f} "
+            f"coverage={info.get('coverage', {})}",
             flush=True,
         )
         return
@@ -302,6 +304,8 @@ def main():
     p.add_argument("--adapt-steps", type=int, default=10)
     p.add_argument("--task-batch-size", type=int, default=1)
     p.add_argument("--candidate-batch-size", type=int, default=8)
+    p.add_argument("--task-seed", type=int, default=None,
+                   help="Task initialization and shuffle seed; defaults to runner.seed")
     p.add_argument("--task-max-length", type=int, default=384)
     p.add_argument("--score-temperature", type=float, default=0.07)
     p.add_argument("--graph-tokens", type=int, default=8)
@@ -378,6 +382,12 @@ def main():
         "solver_info": state0.solver_info,
     })
 
+    import torch
+    import random
+    task_seed = cfg.runner.seed if args.task_seed is None else args.task_seed
+    random.seed(task_seed)
+    np.random.seed(task_seed)
+    torch.manual_seed(task_seed)
     task_lm, tokenizer = load_local_causal_lm(
         args.task_model,
         dtype=args.task_dtype,
@@ -427,6 +437,21 @@ def main():
     import torch
     trainable = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=args.task_lr)
+    training_stream = RetrievalQueryStream(train_ctx, seed=task_seed)
+    initial_training_state = capture_retrieval_training_state(
+        model, optimizer, training_stream,
+        candidate_encoder_fingerprint=evaluator.candidate_metadata()["fingerprint"],
+    )
+    torch.save(initial_training_state, args.output / "checkpoints" / "retrieval_initial.pt")
+    manifest["candidate_encoder"] = evaluator.candidate_metadata()
+    manifest["task_training"] = {
+        "semantics": "cumulative_lora_and_optimizer_across_accepted_phases",
+        "initial_trainable_fingerprint": initial_training_state["trainable_fingerprint"],
+        "initialization_seed": task_seed,
+        "coverage": training_stream.summary(),
+    }
+    _write_json(args.output / "run_manifest.json", manifest)
+    del initial_training_state
 
     warmup = None
     if args.warmup_steps > 0:
@@ -436,6 +461,7 @@ def main():
             max_grad_norm=cfg.grpo.max_grad_norm,
             progress_callback=_progress_printer,
             progress_label="task_warmup",
+            training_stream=training_stream,
         )
         print(f"retrieval warmup: {warmup}", flush=True)
 
@@ -460,6 +486,7 @@ def main():
             max_grad_norm=cfg.grpo.max_grad_norm,
             progress_callback=_progress_printer,
             progress_label="task_adapt",
+            training_stream=training_stream,
         )
 
     runner = GraphPhaseRunner(
@@ -614,6 +641,10 @@ def main():
 
     final_graph = evaluator.evaluate_snapshot(result.final_state.snapshot, graph_ctx)
     final_val = evaluator.evaluate_snapshot(result.final_state.snapshot, val_ctx)
+    torch.save(capture_retrieval_training_state(
+        model, optimizer, training_stream,
+        candidate_encoder_fingerprint=evaluator.candidate_metadata()["fingerprint"],
+    ), args.output / "checkpoints" / "retrieval_final.pt")
 
     # Final-only holdout: do not read or encode test patents until graph search and
     # accepted-graph task adaptation are completely finished.
@@ -657,6 +688,8 @@ def main():
         "initial_lambda": lam0,
         "task": "fixed-pool examiner-citation retrieval",
         "candidate_index_frozen": True,
+        "candidate_encoder": evaluator.candidate_metadata(),
+        "task_training": {**manifest["task_training"], "coverage": training_stream.summary()},
         "pool_size": graph_ctx.pool_size,
         "task_model": args.task_model,
         "warmup": warmup,

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -11,6 +13,7 @@ import numpy as np
 from .downstream import TaskMetrics, EvaluationResult, EvaluationError
 from .graph_tokens import error_weighted_edge_relevance
 from .patent_retrieval import load_candidate_pools
+from .retrieval_state import FrozenCandidateSnapshot, RetrievalQueryStream
 
 
 def _torch():
@@ -275,21 +278,80 @@ class FrozenGraphRetrievalEvaluator:
         if self.candidate_batch_size < 1:
             raise ValueError("candidate_batch_size must be positive")
         self._candidate_cache = {}
+        self._candidate_cache_fingerprints = {}
+        self._candidate_snapshot = FrozenCandidateSnapshot(model.causal_lm)
+        self._candidate_text_hashes = {}
+        self._encoding_signature = None
+        self._prepared_contexts = {}
+        self._training_stream = None
+
+    def training_stream(self, context, seed=17):
+        if self._training_stream is None:
+            self._training_stream = RetrievalQueryStream(context, seed=seed)
+        self._training_stream.validate_context(context)
+        if self._training_stream.seed != int(seed):
+            raise ValueError("Training shuffle seed changed during a run")
+        return self._training_stream
+
+    def candidate_metadata(self):
+        fingerprint = self._candidate_snapshot.fingerprint
+        consistent = (self._candidate_cache.keys() == self._candidate_cache_fingerprints.keys()
+                      and all(value == fingerprint for value in self._candidate_cache_fingerprints.values()))
+        if not consistent:
+            raise ValueError("Candidate cache contains inconsistent encoder fingerprints")
+        return {**self._candidate_snapshot.metadata(),
+                "encoding_signature": self._encoding_signature,
+                "cached_candidates": len(self._candidate_cache),
+                "cache_consistent": consistent}
+
+    def _validate_encoding(self, context):
+        tok = context.tokenizer
+        vocab = tok.get_vocab() if hasattr(tok, "get_vocab") else None
+        backend = json.loads(tok.backend_tokenizer.to_str()) if hasattr(tok, "backend_tokenizer") else None
+        if backend is not None:
+            # Hugging Face updates these temporary batch settings during calls.
+            backend.pop("padding", None)
+            backend.pop("truncation", None)
+        signature = sha256(json.dumps({
+            "tokenizer_class": type(tok).__module__ + "." + type(tok).__qualname__,
+            "name": getattr(tok, "name_or_path", None),
+            "vocab": vocab, "special_tokens": getattr(tok, "special_tokens_map", None),
+            "padding_side": getattr(tok, "padding_side", None),
+            "truncation_side": getattr(tok, "truncation_side", None),
+            "pad_token_id": getattr(tok, "pad_token_id", None),
+            "eos_token_id": getattr(tok, "eos_token_id", None),
+            "backend": backend,
+            "max_length": context.max_length, "pooling": "last_active_l2",
+        }, sort_keys=True, default=str).encode()).hexdigest()
+        if self._encoding_signature is not None and signature != self._encoding_signature:
+            raise ValueError("Candidate tokenization/max_length differs from fixed index")
+        self._encoding_signature = signature
 
     def prepare(self, context: RetrievalTaskContext):
         torch, _ = _torch()
+        self._candidate_snapshot.assert_stable()
+        self._validate_encoding(context)
+        if self._prepared_contexts.get(id(context)) is context:
+            return {"encoded": 0, "cached": len(self._candidate_cache),
+                    **self.candidate_metadata()}
         missing = []
         seen = set()
         for row in context.candidate_ids:
             for pid in row:
+                if pid not in seen:
+                    text_hash = sha256(context.text_by_id[pid].encode()).hexdigest()
+                    if pid in self._candidate_text_hashes and text_hash != self._candidate_text_hashes[pid]:
+                        raise ValueError(f"Candidate text changed for cached patent: {pid}")
+                    self._candidate_text_hashes[pid] = text_hash
                 if pid not in self._candidate_cache and pid not in seen:
                     missing.append(pid)
-                    seen.add(pid)
+                seen.add(pid)
         if not missing:
-            return {"encoded": 0, "cached": len(self._candidate_cache)}
-        self.model.eval()
+            self._prepared_contexts[id(context)] = context
+            return {"encoded": 0, "cached": len(self._candidate_cache),
+                    **self.candidate_metadata()}
         device = self.model.device
-        with torch.no_grad():
+        with self._candidate_snapshot.activate():
             for start in range(0, len(missing), self.candidate_batch_size):
                 ids = missing[start:start + self.candidate_batch_size]
                 batch = encode_text_batch(
@@ -299,15 +361,22 @@ class FrozenGraphRetrievalEvaluator:
                     device=device,
                 )
                 vec = self.model.encode_candidates(**batch).detach().float().cpu()
+                if not torch.isfinite(vec).all():
+                    raise EvaluationError("Candidate encoder returned nonfinite vectors")
                 for pid, row in zip(ids, vec):
                     self._candidate_cache[pid] = row
-        return {"encoded": len(missing), "cached": len(self._candidate_cache)}
+                    self._candidate_cache_fingerprints[pid] = self._candidate_snapshot.fingerprint
+        self._prepared_contexts[id(context)] = context
+        return {"encoded": len(missing), "cached": len(self._candidate_cache),
+                **self.candidate_metadata()}
 
     def _candidate_tensor(self, candidate_ids, device, dtype):
         torch, _ = _torch()
         rows = []
         for pool in candidate_ids:
             try:
+                if any(self._candidate_cache_fingerprints[pid] != self._candidate_snapshot.fingerprint for pid in pool):
+                    raise EvaluationError("Candidate index encoder fingerprint mismatch")
                 rows.append(torch.stack([self._candidate_cache[pid] for pid in pool], dim=0))
             except KeyError as exc:
                 raise EvaluationError(f"candidate index missing patent {exc.args[0]}") from exc
@@ -473,22 +542,25 @@ def adapt_retrieval_model(
     max_grad_norm=1.0,
     progress_callback=None,
     progress_label="task_adapt",
+    training_stream=None,
+    shuffle_seed=17,
 ):
-    """Accepted-graph-only LoRA + SoftGraphTokenizer query-side adaptation."""
+    """Cumulative query adaptation with one continuous shuffled training stream."""
     if steps < 1:
         raise ValueError("steps must be positive")
     torch, F = _torch()
+    if model is not evaluator.model:
+        raise ValueError("Adaptation model must match evaluator")
+    stream = (evaluator.training_stream(context, seed=shuffle_seed)
+              if training_stream is None else training_stream)
+    stream.validate_context(context)
+    before = stream.summary()
     evaluator.prepare(context)
     model.train()
     device = model.device
-    iterator = iter(context.batches())
     losses_out = []
     for step_index in range(int(steps)):
-        try:
-            info = next(iterator)
-        except StopIteration:
-            iterator = iter(context.batches())
-            info = next(iterator)
+        info = stream.batch(context)
         batch = encode_text_batch(
             context.tokenizer,
             info["query_texts"],
@@ -512,6 +584,7 @@ def adapt_retrieval_model(
         params = [p for p in model.parameters() if p.requires_grad]
         torch.nn.utils.clip_grad_norm_(params, float(max_grad_norm))
         optimizer.step()
+        stream.advance()
         loss_value = float(loss.detach().cpu())
         losses_out.append(loss_value)
         if progress_callback is not None:
@@ -522,6 +595,7 @@ def adapt_retrieval_model(
                 "total_steps": int(steps),
                 "loss": loss_value,
                 "moving_avg_10": float(np.mean(window)),
+                "coverage": stream.summary(),
             })
     return {
         "steps": int(steps),
@@ -529,4 +603,9 @@ def adapt_retrieval_model(
         "final_loss": losses_out[-1],
         "mean_loss": float(np.mean(losses_out)),
         "candidate_index_frozen": True,
+        "candidate_encoder": evaluator.candidate_metadata(),
+        "training_semantics": "cumulative_lora_and_optimizer_across_accepted_phases",
+        "coverage_before": before,
+        "coverage": stream.summary(),
+        "phase_query_presentations": stream.summary()["total_query_presentations"] - before["total_query_presentations"],
     }

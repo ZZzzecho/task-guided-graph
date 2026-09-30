@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.1 — 2026-10-01
+
+- Keep a reproducibly shuffled query stream across warmup and accepted-graph
+  adaptation, retaining partial batches and logging pool size, coverage,
+  presentations, epoch/cursor, optimizer steps and seed.
+- Preserve cumulative query LoRA/optimizer semantics and save initial/final
+  trainable, optimizer, stream and RNG states for later equal-budget comparisons.
+- Encode every candidate, including final-only unseen test candidates, with one
+  initial encoder snapshot. Share frozen base weights without a second GLM,
+  fingerprint actual state, and reject incompatible text/tokenization/cache reuse.
+- Add bounded A-F diagnostics for prototypes, attention, full representations,
+  PCA before L2, L2/cache precision, and production sample-axis rank-Gaussian.
+  Report cosine/correlation, entropy, spectra and both effective-rank definitions.
+- Record static-prototype PCA fit and per-concept L2 behavior explicitly, while
+  preserving default projections and compatibility with existing caches.
+- Add correctness/regression tests and a 128-sample synthetic diagnostic sanity
+  check. Real-model GPU and real-patent collapse measurements remain unverified.
+- Leave GRPO, MNGM/weighted Glasso, graph actions and large experiment configs
+  unchanged.
+
 ## v0.5.0 — 2026-09-30
 
 - Initialize each matrix-valued graph with `B_0 = I` and exactly one concept-axis

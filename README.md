@@ -1,4 +1,10 @@
-# Task-Guided Graph RL v0.5.0
+# Task-Guided Graph RL v0.5.1
+
+v0.5.1 修复 retrieval LoRA 的跨阶段 query 覆盖和 candidate encoder snapshot
+一致性，新增 A–F representation-collapse 小样本诊断。默认 prototype PCA、
+投影后 per-concept L2、GRPO/MNGM 算法与实验规模保持不变。
+修改语义、状态接口、诊断命令及验证边界见
+[第一批修复说明](docs/FIRST_REPAIR_BATCH.md)。
 
 当前代码包维护两条共享 Graph-RL 后端、但统计样本定义不同的 MNGM 路线：
 
