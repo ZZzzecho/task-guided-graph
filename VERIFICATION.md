@@ -1,6 +1,20 @@
-# Verification — v0.3.0
+# Verification — v0.5.0
 
-Date: 2026-09-22
+Date: 2026-09-30
+
+## Current change
+
+The complete repository test suite passed: `71 passed` on Python 3.14 with
+NumPy, SciPy, scikit-learn, PyTorch, and pytest. The targeted initialization
+and projection tests passed as part of that suite. `python -m compileall -q
+graph_mvp scripts` also passed after repairing a pre-existing syntax error in
+the patient runner.
+
+These checks use small synthetic matrices. No H04L cache was regenerated and
+no GLM-4.7-Flash retrieval experiment was run for v0.5.0. The v0.4.0 smoke
+results do not establish performance for the PCA-projected graph.
+
+## Historical v0.3.0 verification
 
 ## Automated tests
 

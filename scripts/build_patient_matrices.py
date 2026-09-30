@@ -48,10 +48,13 @@ def main():
         default=None,
         help=(
             "Optional cached MNGM representation dimension. Attention remains in "
-            "the full encoder space; output concept vectors use prefix truncation "
-            "+ L2 normalization (Qwen3-Embedding MRL style)."
+            "the full encoder space; output concept vectors use a PCA projection "
+            "fitted on the concept prototypes, followed by L2 normalization."
         ),
     )
+    p.add_argument("--projection-seed", type=int, default=17)
+    p.add_argument("--projection-file", type=Path, default=None,
+                   help="Optional .npz with mean [D] and matrix [R,D] in place of prototype PCA")
     p.add_argument(
         "--max-patients",
         type=int,
@@ -96,11 +99,22 @@ def main():
         max_length=args.max_length,
         attn_implementation="flash_attention_2" if args.flash_attention else None,
     )
+    projection_mean = projection_matrix = None
+    if args.projection_file is not None:
+        if args.representation_dim is None:
+            raise SystemExit("--projection-file requires --representation-dim")
+        import numpy as np
+        with np.load(args.projection_file, allow_pickle=False) as projection:
+            projection_mean = np.asarray(projection["mean"], dtype=np.float32)
+            projection_matrix = np.asarray(projection["matrix"], dtype=np.float32)
     builder = PatientConceptMatrixBuilder(
         encoder,
         prototypes,
         temperature=args.temperature,
         representation_dim=args.representation_dim,
+        projection_mean=projection_mean,
+        projection_matrix=projection_matrix,
+        projection_seed=args.projection_seed,
     )
 
     if args.id_col is not None:

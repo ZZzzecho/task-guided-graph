@@ -1,4 +1,4 @@
-# Task-Guided Graph RL v0.4.0
+# Task-Guided Graph RL v0.5.0
 
 当前代码包维护两条共享 Graph-RL 后端、但统计样本定义不同的 MNGM 路线：
 
@@ -51,7 +51,7 @@ docs/CURRENT_RESEARCH_HANDOFF_2026-09-23.md
 
 ## 当前状态
 
-截至 v0.4.0：
+v0.4.0 已有结果（v0.5.0 方法改动需要重新验证）：
 
 - Patient-MNGM H04L smoke 已跑通：`[N,64,800] -> MNGM -> citation-retrieval Graph-RL`。
 - Bootstrap representation generation 已跑通：`sentence perturbation -> independent embedding-LoRA training -> H^(b)`。
@@ -126,11 +126,16 @@ token contextual states [L,1024]
 + pooled concept prototypes [800,1024]
 -> full-1024D concept-token attention
 -> concept-conditioned vectors
--> MRL-style first 64 dims + L2 normalization
+-> fixed 1024-to-64 PCA projection matrix + L2 normalization
 -> H_d [64,800]
 ```
 
-当前 H04L smoke 已验证：
+投影矩阵在训练集概念 prototype 上拟合，并随 patient matrix cache 保存。
+比较候选图期间投影保持固定。不指定 `--representation-dim` 则保留全维表示。
+初始图固定 `B_0 = I`，只执行一次概念方向 weighted Graphical Lasso；
+后续惩罚更新仍执行完整交替 MNGM。
+
+v0.4.0 的 H04L smoke 已验证旧的前 64 维路径；v0.5.0 需重新生成 patient cache 并验证实验结果：
 
 ```text
 [32,64,800]
@@ -158,6 +163,7 @@ Candidate patent embeddings 构成固定 retrieval index。Graph-RL candidate �
 README.md
 docs/CURRENT_RESEARCH_HANDOFF_2026-09-23.md
 docs/PATENTS_H04L_DATA.md
+docs/IMPLEMENTATION_v0.5.md
 docs/IMPLEMENTATION_v0.4.md
 ```
 
@@ -180,5 +186,7 @@ python -m pytest -q
 GLM graph-token path 需要本地 Transformers 模型对象，因为 soft graph tokens 通过 `inputs_embeds` 注入。标准 OpenAI-compatible vLLM/SGLang chat API 不能直接替代。
 
 ## 版本
+
+`v0.5.0`：初始图固定 `B_0=I` 并只求一次概念方向 weighted Graphical Lasso；Patient-MNGM 由显式 PCA 投影矩阵替代前 64 维截取。
 
 `v0.4.0`：H04L retrieval 成为统一 downstream；Patient-MNGM 已跑通 smoke；Bootstrap 改为独立版本 + 完整 epoch 训练，并明确其高计算成本。

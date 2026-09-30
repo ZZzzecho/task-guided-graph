@@ -120,6 +120,9 @@ def main():
     cfg = Config.load(args.config)
     vocab = load_concept_vocabulary(args.concepts)
     cache = PatientMatrixDataset(args.patient_cache)
+    if cache.metadata.get("representation_reduction") == "qwen3_mrl_prefix_l2":
+        raise SystemExit("This cache uses the v0.4 prefix truncation; rebuild it with the v0.5 PCA projection.")
+    cache.load_projection()
     if tuple(cache.concept_ids) != tuple(vocab.concept_ids):
         raise SystemExit("Patient cache concept axis does not match --concepts vocabulary")
 
@@ -218,7 +221,8 @@ def main():
 
     final_val = evaluator.evaluate_snapshot(result.final_state.snapshot, val_ctx)
     summary = {
-        "patient_cache": str(args.patient_cache),\n        "data_dir": str(data_dir),
+        "patient_cache": str(args.patient_cache),
+        "data_dir": str(data_dir),
         "patient_cache_fingerprint": cache.fingerprint(),
         "mngm_shape": list(patient_matrices.shape),
         "task_model": args.task_model,

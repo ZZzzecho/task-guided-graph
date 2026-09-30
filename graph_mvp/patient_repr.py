@@ -6,8 +6,8 @@ Qwen3-Embedding-0.6B supplies:
 - final-layer contextual patient token states [B,L,1024].
 
 Concept-conditioned token attention is computed in the encoder's full hidden space.
-Optionally, the resulting concept vectors are reduced with Qwen3-Embedding's
-MRL-style prefix truncation + L2 normalization before being cached for MNGM.
+Optionally, a PCA-initialized projection matrix reduces the concept vectors
+before they are cached for MNGM.
 H_d is cached once and never refreshed during Graph-RL.
 """
 from __future__ import annotations
@@ -246,13 +246,14 @@ class PatientConceptMatrixBuilder:
     """Vectorized cosine + token-softmax builder for H_d [R,P].
 
     Attention is always computed in the full encoder/prototype space D.  When
-    representation_dim is set, the weighted concept vectors are truncated to the
-    first R dimensions and L2-normalized along the representation axis, matching
-    the MRL-style dimensionality reduction used by Qwen3-Embedding.
+    representation_dim is set, a fixed R x D projection is applied to weighted
+    concept vectors and then L2-normalized.  PCA on training concept prototypes
+    supplies the default projection; an explicit matrix can also be supplied.
     """
 
     def __init__(self, encoder, concept_prototypes, *, temperature=0.1,
-                 representation_dim=None):
+                 representation_dim=None, projection_matrix=None,
+                 projection_mean=None, projection_seed=17):
         torch, F = _torch()
         p = torch.as_tensor(concept_prototypes, dtype=torch.float32)
         if p.ndim != 2 or p.shape[0] < 2 or p.shape[1] < 2 or not torch.isfinite(p).all():
@@ -275,7 +276,32 @@ class PatientConceptMatrixBuilder:
         self.temperature = float(temperature)
         self.encoder_hidden_size = input_dim
         self.representation_dim = output_dim
-        self.use_mrl_reduction = representation_dim is not None
+        self.use_projection = representation_dim is not None
+        if self.use_projection:
+            if projection_matrix is None:
+                from .bootstrap import fixed_pca_projection
+                mean, components = fixed_pca_projection(
+                    p.detach().cpu().numpy().T,
+                    output_dim=output_dim, seed=projection_seed,
+                )
+                self.projection_kind = "prototype_pca"
+            else:
+                components = np.asarray(projection_matrix, dtype=np.float32)
+                mean = (np.zeros(input_dim, dtype=np.float32) if projection_mean is None
+                        else np.asarray(projection_mean, dtype=np.float32))
+                self.projection_kind = "provided"
+            if components.shape != (output_dim, input_dim) or mean.shape != (input_dim,):
+                raise ValueError("projection matrix/mean shape mismatch")
+            if not np.isfinite(components).all() or not np.isfinite(mean).all():
+                raise ValueError("projection matrix/mean must be finite")
+            self.projection_matrix = torch.as_tensor(components.copy())
+            self.projection_mean = torch.as_tensor(mean.copy())
+        else:
+            if projection_matrix is not None or projection_mean is not None:
+                raise ValueError("projection requires representation_dim")
+            self.projection_matrix = None
+            self.projection_mean = None
+            self.projection_kind = "none"
         self._F = F
 
     @property
@@ -304,11 +330,10 @@ class PatientConceptMatrixBuilder:
         alpha = torch.softmax(sim / self.temperature, dim=1)
         # Weighted sum is first formed in the full encoder space [B,D,P].
         h_full = torch.einsum("blp,bld->bdp", alpha, z)
-        if self.use_mrl_reduction:
-            # Qwen3-Embedding MRL-style reduction: prefix truncation followed by
-            # L2 normalization.  Attention itself remains in the full D-dimensional
-            # space, so only the MNGM representation axis is reduced.
-            h = h_full[:, :self.representation_dim, :]
+        if self.use_projection:
+            matrix = self.projection_matrix.to(device=z.device, dtype=z.dtype)
+            mean = self.projection_mean.to(device=z.device, dtype=z.dtype)
+            h = torch.einsum("rd,bdp->brp", matrix, h_full - mean[None, :, None])
             h = F.normalize(h, p=2, dim=1)
         else:
             h = h_full
@@ -336,6 +361,7 @@ class PatientMatrixCacheWriter:
     def __init__(self, output_dir, concept_ids: Sequence[str], hidden_size: int, *,
                  dtype="float16", encoder_id=DEFAULT_PATIENT_ENCODER, temperature=0.1,
                  encoder_hidden_size=None, representation_reduction="none",
+                 projection_sha256=None,
                  overwrite=False):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -353,6 +379,7 @@ class PatientMatrixCacheWriter:
             int(encoder_hidden_size) if encoder_hidden_size is not None else self.hidden_size
         )
         self.representation_reduction = str(representation_reduction)
+        self.projection_sha256 = projection_sha256
         self.shards = []
         self.n_samples = 0
 
@@ -388,6 +415,7 @@ class PatientMatrixCacheWriter:
             "representation_dim": self.hidden_size,
             "encoder_hidden_size": self.encoder_hidden_size,
             "representation_reduction": self.representation_reduction,
+            "projection_sha256": self.projection_sha256,
             "num_concepts": len(self.concept_ids),
             "concept_ids": list(self.concept_ids),
             "dtype": self.dtype.name,
@@ -422,6 +450,19 @@ class PatientMatrixDataset:
 
     def __len__(self):
         return self.n_samples
+
+    def load_projection(self):
+        """Return the saved PCA/provided basis, checking its cache fingerprint."""
+        expected = self.metadata.get("projection_sha256")
+        if expected is None:
+            return None
+        with np.load(self.cache_dir / "projection.npz", allow_pickle=False) as data:
+            mean = np.asarray(data["mean"], dtype=np.float32)
+            matrix = np.asarray(data["matrix"], dtype=np.float32)
+        actual = sha256(mean.tobytes() + matrix.tobytes()).hexdigest()
+        if actual != expected:
+            raise ValueError("Patient projection does not match cache metadata")
+        return mean, matrix
 
     def iter_shards(self, mmap_mode="r"):
         for item in self.shards:
@@ -473,14 +514,22 @@ def build_patient_cache_from_frame(frame, builder: PatientConceptMatrixBuilder, 
         raise ValueError(f"Patient frame is missing columns: {sorted(required - set(frame.columns))}")
     if batch_size < 1 or shard_size < 1:
         raise ValueError("batch_size and shard_size must be positive")
+    projection_hash = None
+    if builder.use_projection:
+        mean = builder.projection_mean.numpy()
+        matrix = builder.projection_matrix.numpy()
+        projection_hash = sha256(mean.tobytes() + matrix.tobytes()).hexdigest()
     writer = PatientMatrixCacheWriter(
         output_dir, concept_ids, builder.hidden_size, dtype=cache_dtype,
         encoder_id=encoder_id, temperature=builder.temperature,
         encoder_hidden_size=builder.encoder_hidden_size,
-        representation_reduction=(
-            "qwen3_mrl_prefix_l2" if builder.use_mrl_reduction else "none"
-        ),
+        representation_reduction=(builder.projection_kind + "_l2"
+                                  if builder.use_projection else "none"),
+        projection_sha256=projection_hash,
         overwrite=overwrite)
+    if builder.use_projection:
+        np.savez_compressed(Path(output_dir) / "projection.npz",
+                            mean=mean, matrix=matrix)
     matrix_buffer, subject_buffer, stay_buffer = [], [], []
     for start in range(0, len(frame), batch_size):
         batch = frame.iloc[start:start + batch_size]

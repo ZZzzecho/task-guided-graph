@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.0 — 2026-09-30
+
+- Initialize each matrix-valued graph with `B_0 = I` and exactly one concept-axis
+  weighted Graphical Lasso solve. Later penalty edits still run full alternating MNGM.
+- Replace Patient-MNGM prefix truncation with an explicit 1024-to-R projection
+  fitted by PCA on training concept prototypes. Save the projection with each
+  patient cache and reject v0.4 prefix caches in the task runners.
+- Preserve the option to use full-dimensional patient representations by omitting
+  `--representation-dim`. Bootstrap-MNGM retains its existing fixed PCA basis.
+- Add focused tests for the one-solve initialization and non-prefix projection.
+- Repair a pre-existing syntax error in the patient runner's summary output.
+
 ## v0.3.0 — 2026-09-22
 
 Patient-MNGM implementation based on `PATIENT_MNGM_GRAPH_RL_HANDOFF_v0.1_2026-09-22.md`.

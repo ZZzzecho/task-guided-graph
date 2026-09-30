@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 import numpy as np
 import pytest
 
@@ -47,7 +48,7 @@ def test_patient_builder_shape_and_attention_normalization():
     assert torch.isfinite(h).all()
 
 
-def test_patient_builder_mrl_reduction_keeps_full_space_attention():
+def test_patient_builder_pca_projection_keeps_full_space_attention():
     prototypes = np.array([
         [1, 0, 0, 0],
         [0, 1, 0, 0],
@@ -62,12 +63,34 @@ def test_patient_builder_mrl_reduction_keeps_full_space_attention():
     ])
     mask = torch.ones((2, 3), dtype=torch.bool)
     h, alpha = builder.from_hidden_states(z, mask)
+    full_builder = PatientConceptMatrixBuilder(FakeEncoder(), prototypes, temperature=0.2)
+    _, full_alpha = full_builder.from_hidden_states(z, mask)
     assert alpha.shape == (2, 3, 3)
+    assert torch.allclose(alpha, full_alpha)
     assert h.shape == (2, 2, 3)
     assert builder.encoder_hidden_size == 4
     assert builder.hidden_size == 2
+    assert builder.projection_kind == "prototype_pca"
+    assert builder.projection_matrix.shape == (2, 4)
     norms = torch.linalg.vector_norm(h, dim=1)
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-6)
+
+
+def test_patient_builder_uses_projection_matrix_instead_of_prefix():
+    prototypes = np.eye(4, dtype=np.float32)
+    matrix = np.array([[0, 0, 1, 0], [0, 0, 0, 1]], dtype=np.float32)
+    builder = PatientConceptMatrixBuilder(
+        FakeEncoder(), prototypes, representation_dim=2, projection_matrix=matrix
+    )
+    full = PatientConceptMatrixBuilder(FakeEncoder(), prototypes)
+    z = torch.tensor([[[1., 2., 3., 4.], [2., 1., 4., 3.]]])
+    mask = torch.ones((1, 2), dtype=torch.bool)
+    h, alpha = builder.from_hidden_states(z, mask)
+    h_full, full_alpha = full.from_hidden_states(z, mask)
+    expected = torch.nn.functional.normalize(h_full[:, 2:4, :], p=2, dim=1)
+    assert torch.allclose(alpha, full_alpha)
+    assert torch.allclose(h, expected, atol=1e-6)
+    assert not torch.allclose(h, torch.nn.functional.normalize(h_full[:, :2, :], p=2, dim=1))
 
 
 def test_concept_prototype_cache_roundtrip(tmp_path):
@@ -102,3 +125,21 @@ def test_patient_cache_shards_and_materialize(tmp_path):
     assert y.shape == (4, 4, 3)
     np.testing.assert_allclose(y[:2], x1, atol=1e-3)
     assert isinstance(ds.fingerprint(), str) and len(ds.fingerprint()) == 64
+
+
+def test_patient_projection_saved_with_cache(tmp_path):
+    mean = np.zeros(4, dtype=np.float32)
+    matrix = np.eye(2, 4, dtype=np.float32)
+    digest = sha256(mean.tobytes() + matrix.tobytes()).hexdigest()
+    writer = PatientMatrixCacheWriter(
+        tmp_path, ("a", "b"), hidden_size=2,
+        encoder_hidden_size=4, representation_reduction="prototype_pca_l2",
+        projection_sha256=digest,
+    )
+    np.savez_compressed(tmp_path / "projection.npz", mean=mean, matrix=matrix)
+    writer.write_shard(np.ones((2, 2, 2), dtype=np.float32), [1, 2], [1, 2])
+    writer.close()
+    ds = PatientMatrixDataset(tmp_path)
+    saved_mean, saved_matrix = ds.load_projection()
+    np.testing.assert_array_equal(saved_mean, mean)
+    np.testing.assert_array_equal(saved_matrix, matrix)

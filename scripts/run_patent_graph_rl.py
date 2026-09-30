@@ -322,6 +322,9 @@ def main():
     cfg = Config.load(args.config)
     vocab = load_concept_vocabulary(args.concepts)
     cache = PatientMatrixDataset(args.cache)
+    if cache.metadata.get("representation_reduction") == "qwen3_mrl_prefix_l2":
+        raise SystemExit("This cache uses the v0.4 prefix truncation; rebuild it with the v0.5 PCA projection.")
+    cache.load_projection()
     if tuple(cache.concept_ids) != tuple(vocab.concept_ids):
         raise SystemExit("cache concept axis does not match vocabulary")
 
@@ -359,7 +362,7 @@ def main():
     estimator = MNGMEstimator(matrices, PATIENT_MATRIX_MODE, cfg.mngm, cfg.solver)
     env = GraphEnvironment(config=cfg.environment, estimator=estimator)
     lam0 = cfg.runner.initial_lambda if args.initial_lambda is None else float(args.initial_lambda)
-    print(f"Initializing MNGM graph from shape={list(matrices.shape)} lambda={lam0}", flush=True)
+    print(f"Initializing graph with B0=I and one weighted GLASSO from shape={list(matrices.shape)} lambda={lam0}", flush=True)
     state0 = env.initialize_from_estimator(
         lam0,
         cache.concept_ids,

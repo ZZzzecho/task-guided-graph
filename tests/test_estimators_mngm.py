@@ -38,6 +38,8 @@ def test_vector_estimator_is_current_patient_scalar_mode():
     assert result.converged and result.estimator_kind == VECTOR_MODE
     assert result.S.shape == (5, 5) and result.Theta.shape == (5, 5)
     assert result.auxiliary["representation_dim"] == 1
+    state = GraphEnvironment(estimator=est).initialize_from_estimator(.4, tuple(f"c{i}" for i in range(5)))
+    assert state.snapshot.Theta.shape == (5, 5)
 
 
 def test_patient_and_bootstrap_modes_share_same_mngm_solver_semantics():
@@ -68,6 +70,10 @@ def test_edge_specific_penalty_and_environment_reoptimize_both_axes():
     ids = tuple(f"c{i}" for i in range(4))
     state = env.initialize_from_estimator(.2, ids)
     old_b = np.asarray(state.snapshot.auxiliary["representation_precision"])
+    np.testing.assert_array_equal(old_b, np.eye(3))
+    assert state.snapshot.auxiliary["initialization_method"] == "weighted_glasso_B_identity"
+    assert state.solver_info["inner_solver_calls"] == 1
+    assert est.representation_solve_calls == 0
     action = ActionRecord("cand", state.state_id, (0, 1), "increase", -1., "test")
     cand = env.step(state, action)
     assert cand.valid and cand.snapshot is not None
@@ -75,8 +81,22 @@ def test_edge_specific_penalty_and_environment_reoptimize_both_axes():
     assert cand.snapshot.Lambda[0, 1] > state.snapshot.Lambda[0, 1]
     assert cand.snapshot.auxiliary["representation_precision"].shape == old_b.shape
     assert cand.solver_info["inner_solver_calls"] >= 2
+    assert est.representation_solve_calls > 0
     # The concept-axis penalty is the only policy action; the row-axis precision is re-estimated.
     assert est.solve_calls == 2
+
+
+def test_initial_glasso_matches_direct_concept_covariance_solve():
+    x = matrix_samples(n=100, r=3, p=4)
+    est = MNGMEstimator(x, BOOTSTRAP_MATRIX_MODE, mcfg(), scfg())
+    expected_s = est._concept_covariance(np.eye(est.r))
+    expected_a = est.concept_solver.solve(expected_s, .3)
+    initial = est.solve_initial(.3)
+    assert expected_a.converged and initial.converged
+    np.testing.assert_allclose(initial.S, expected_s)
+    np.testing.assert_allclose(initial.Theta, expected_a.Theta, atol=1e-7)
+    np.testing.assert_array_equal(initial.auxiliary["representation_precision"], np.eye(est.r))
+    assert est.representation_solve_calls == 0
 
 
 def test_graph_sample_npz_roundtrip(tmp_path):

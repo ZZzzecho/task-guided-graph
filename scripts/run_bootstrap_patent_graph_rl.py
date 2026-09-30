@@ -286,7 +286,7 @@ def main():
             torch.cuda.empty_cache()
 
     # ------------------------------------------------------------------
-    # Stage B: Bootstrap-MNGM initial graph.
+    # Stage B: B0=I, one weighted concept-axis GLASSO initial graph.
     # ------------------------------------------------------------------
     estimator = MNGMEstimator(
         H, BOOTSTRAP_MATRIX_MODE, cfg.mngm, cfg.solver
@@ -294,7 +294,7 @@ def main():
     env = GraphEnvironment(config=cfg.environment, estimator=estimator)
     lam0 = cfg.runner.initial_lambda if args.initial_lambda is None else float(args.initial_lambda)
     print(
-        f"Initializing Bootstrap-MNGM from shape={list(H.shape)} lambda={lam0}",
+        f"Initializing Bootstrap graph with B0=I weighted GLASSO from shape={list(H.shape)} lambda={lam0}",
         flush=True,
     )
     state0 = env.initialize_from_estimator(

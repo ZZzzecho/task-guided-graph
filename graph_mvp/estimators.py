@@ -151,8 +151,11 @@ class VectorGGMEstimator:
     def solve_calls(self):
         return self.inner_solver.solve_calls
 
-    def solve(self, concept_penalty, initial_theta=None, initial_representation_precision=None):
-        result = self.inner_solver.solve(self.S, concept_penalty, initial_theta=initial_theta)
+    def solve(self, concept_penalty, initial_theta=None, initial_representation_precision=None,
+              progress_callback=None):
+        result = self.inner_solver.solve(self.S, concept_penalty,
+                                         initial_theta=initial_theta,
+                                         progress_callback=progress_callback)
         aux = {
             "data_fingerprint": self.data_fingerprint,
             "sample_semantics": "patient",
@@ -337,6 +340,44 @@ class MNGMEstimator:
         # Divide by representation dimension so RewardFunction's later /p gives
         # approximately per-cell degradation, independent of representation width.
         return float((-self.p * logdet_b - self.r * logdet_a + trace) / self.r)
+
+    def solve_initial(self, concept_penalty, progress_callback=None):
+        """Build G_0 with B_0=I and one concept-axis weighted GLASSO solve.
+
+        The representation precision is deliberately not optimized here.  Later
+        penalty proposals still use ``solve`` and its full alternating MNGM fit.
+        """
+        lam_a = penalty_matrix(self.p, concept_penalty)
+        b0 = np.eye(self.r)
+        sc = self._concept_covariance(b0)
+        self.solve_calls += 1
+        result = self.concept_solver.solve(
+            sc, lam_a, progress_callback=progress_callback,
+            label="concept_glasso",
+        )
+        info = result.info()
+        aux = {
+            "data_fingerprint": self.data_fingerprint,
+            "sample_semantics": self.sample_semantics,
+            "n_samples": self.n_samples,
+            "representation_dim": self.r,
+            "representation_precision": readonly(b0),
+            "mngm_transform": self.config.transform,
+            "scale_constraint": self.config.scale_constraint,
+            "initialization_method": "weighted_glasso_B_identity",
+            "concept_solver_info": info,
+            "inner_solver_calls": 1,
+        }
+        if not result.converged:
+            return EstimatorResult(None, None, False, 1,
+                                   f"initial concept-axis solve failed: {result.message}",
+                                   self.kind, freeze(aux))
+        a0 = np.asarray(result.Theta)
+        stat = self._statistical_loss(a0, b0)
+        penalty_a = float(np.sum(np.triu(lam_a * np.abs(a0), 1)))
+        return EstimatorResult(readonly(sc), readonly(a0), True, 1,
+                               "converged", self.kind, freeze(aux), stat,
+                               stat + penalty_a)
 
     def solve(self, concept_penalty, initial_theta=None, initial_representation_precision=None,
               progress_callback=None):

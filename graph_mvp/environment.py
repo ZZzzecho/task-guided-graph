@@ -96,7 +96,8 @@ class GraphEnvironment:
             raise ValueError("No bound graph estimator")
         lam = penalty_matrix(len(concept_ids), penalty)
         self._check_bounds(lam)
-        result = self.estimator.solve(lam, progress_callback=progress_callback)
+        initial_solver = getattr(self.estimator, "solve_initial", self.estimator.solve)
+        result = initial_solver(lam, progress_callback=progress_callback)
         if not result.converged:
             raise RuntimeError(f"Initial graph solve failed: {result.message}")
         snapshot = self._snapshot_from_estimator_result(tuple(concept_ids), lam, result)
