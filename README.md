@@ -1,4 +1,10 @@
-# Task-Guided Graph RL v0.5.1
+# Task-Guided Graph RL v0.5.2
+
+v0.5.2 新增五组 attention 设计诊断：打分/温度、token 共同方向、value 范数、
+人工 concept 证据核验，以及句子/片段 pooled embedding 对照。复用训练样本和
+固定投影，独立输出报告，不更改正式表示/cache、LoRA、GRPO 或 MNGM 默认流程。
+服务器一键命令、输出文件与人工核验方法见
+[Attention 诊断说明](docs/ATTENTION_DESIGN_DIAGNOSTICS.md)。
 
 v0.5.1 修复 retrieval LoRA 的跨阶段 query 覆盖和 candidate encoder snapshot
 一致性，新增 A–F representation-collapse 小样本诊断。默认 prototype PCA、

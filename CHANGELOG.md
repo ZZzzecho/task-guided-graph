@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.5.2 — 2026-10-01
+
+- Add a separate bounded five-probe attention-design command: absolute logit
+  levels vs token discrimination, temperature sweep, token common-direction
+  geometry, fixed-attention raw/unit/centered value controls, and pooled chunk
+  evidence on the same visible text range.
+- Compare the production-native baseline with FP32 attention/aggregation on the
+  same native states; trace every variant through pre-PCA, fixed PCA, L2, cache
+  precision and production rank-Gaussian without changing defaults.
+- Replay exact training rows from v0.5.1 reports, validate input/projection hashes,
+  and export per-concept scores, evidence spans and blank human-label templates.
+  Explicit labels can be evaluated later without reloading the model; unknown
+  concepts are never fabricated as negatives and incomplete chunk comparisons
+  are excluded from both methods' paired evaluation.
+- Add a server wrapper and controlled analytic/CLI tests. Real Qwen experiments
+  and human evidence labels are required before choosing a new formal design.
+
 ## v0.5.1 — 2026-10-01
 
 - Keep a reproducibly shuffled query stream across warmup and accepted-graph
