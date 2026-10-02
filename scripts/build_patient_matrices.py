@@ -14,7 +14,7 @@ from graph_mvp.patient_repr import (
 )
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(
         description="Build frozen document-level MNGM H_d cache from prepared text data"
     )
@@ -25,6 +25,12 @@ def main():
         help="Prepared train.csv or train.csv.gz containing a text column",
     )
     p.add_argument("--prototypes", type=Path, required=True)
+    p.add_argument("--representation-mode", choices=("token_attention", "joint_evidence"),
+                   default="token_attention", help="Legacy attention or direct F(concept,evidence)")
+    p.add_argument("--evidence-top-k", type=int, default=3)
+    p.add_argument("--chunk-max-tokens", type=int, default=128)
+    p.add_argument("--encode-batch-size", type=int, default=8,
+                   help="Chunk/joint Qwen batch size, separate from document batch size")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--model", default=DEFAULT_PATIENT_ENCODER)
     p.add_argument("--local-files-only", action="store_true")
@@ -48,9 +54,9 @@ def main():
         type=int,
         default=None,
         help=(
-            "Optional cached MNGM representation dimension. Attention remains in "
-            "the full encoder space; output concept vectors use a PCA projection "
-            "fitted on the concept prototypes, followed by L2 normalization."
+            "Optional MNGM representation dimension. Default basis is prototype PCA; "
+            "legacy attention centers and L2-normalizes, joint evidence uses only "
+            "the shared linear basis without centering/output L2."
         ),
     )
     p.add_argument("--projection-seed", type=int, default=17)
@@ -69,7 +75,7 @@ def main():
     )
     p.add_argument("--flash-attention", action="store_true")
     p.add_argument("--overwrite", action="store_true")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     try:
         import pandas as pd
@@ -108,7 +114,14 @@ def main():
         with np.load(args.projection_file, allow_pickle=False) as projection:
             projection_mean = np.asarray(projection["mean"], dtype=np.float32)
             projection_matrix = np.asarray(projection["matrix"], dtype=np.float32)
-    builder = PatientConceptMatrixBuilder(
+    builder_class = PatientConceptMatrixBuilder
+    extra = {}
+    if args.representation_mode == "joint_evidence":
+        from graph_mvp.joint_evidence_repr import JointEvidenceMatrixBuilder
+        builder_class = JointEvidenceMatrixBuilder
+        extra = {"concept_texts": meta["concept_texts"], "top_k": args.evidence_top_k,
+                 "chunk_max_tokens": args.chunk_max_tokens, "encode_batch_size": args.encode_batch_size}
+    builder = builder_class(
         encoder,
         prototypes,
         temperature=args.temperature,
@@ -116,6 +129,7 @@ def main():
         projection_mean=projection_mean,
         projection_matrix=projection_matrix,
         projection_seed=args.projection_seed,
+        **extra,
     )
     print("representation pipeline: " + json.dumps(builder.projection_metadata(), sort_keys=True), flush=True)
 

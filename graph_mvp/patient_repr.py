@@ -408,7 +408,7 @@ class PatientMatrixCacheWriter:
         self.concept_ids = tuple(str(x) for x in concept_ids)
         self.hidden_size = int(hidden_size)
         self.encoder_id = str(encoder_id)
-        self.temperature = float(temperature)
+        self.temperature = None if temperature is None else float(temperature)
         self.encoder_hidden_size = (
             int(encoder_hidden_size) if encoder_hidden_size is not None else self.hidden_size
         )
@@ -474,6 +474,8 @@ class PatientMatrixDataset:
     def __init__(self, cache_dir):
         self.cache_dir = Path(cache_dir)
         self.metadata = json.loads((self.cache_dir / "metadata.json").read_text(encoding="utf-8"))
+        if (self.metadata.get("representation_pipeline") or {}).get("cache_build_complete") is False:
+            raise ValueError("Joint evidence cache build is incomplete; do not train from partial shards")
         if self.metadata.get("mode") != "patient_concept_matrix":
             raise ValueError("Not a patient_concept_matrix cache")
         self.concept_ids = tuple(self.metadata["concept_ids"])
@@ -555,31 +557,48 @@ def build_patient_cache_from_frame(frame, builder: PatientConceptMatrixBuilder, 
         mean = builder.projection_mean.numpy()
         matrix = builder.projection_matrix.numpy()
         projection_hash = sha256(mean.tobytes() + matrix.tobytes()).hexdigest()
+    is_joint = getattr(builder, "representation_mode", None) == "joint_evidence"
+    pipeline = builder.projection_metadata()
+    if is_joint:
+        pipeline.update(cache_build_complete=False, evidence_audit="evidence.jsonl")
     writer = PatientMatrixCacheWriter(
         output_dir, concept_ids, builder.hidden_size, dtype=cache_dtype,
         encoder_id=encoder_id, temperature=builder.temperature,
         encoder_hidden_size=builder.encoder_hidden_size,
-        representation_reduction=(builder.projection_kind + "_l2"
+        representation_reduction=(builder.projection_kind + ("_linear_joint" if is_joint else "_l2")
                                   if builder.use_projection else "none"),
         projection_sha256=projection_hash,
-        representation_pipeline=builder.projection_metadata(),
+        representation_pipeline=pipeline,
         overwrite=overwrite)
     if builder.use_projection:
         np.savez_compressed(Path(output_dir) / "projection.npz",
                             mean=mean, matrix=matrix)
+    from contextlib import nullcontext
     matrix_buffer, subject_buffer, stay_buffer = [], [], []
-    for start in range(0, len(frame), batch_size):
-        batch = frame.iloc[start:start + batch_size]
-        h, _, _ = builder.encode(batch[text_col].astype(str).tolist())
-        h = h.detach().float().cpu().numpy()
-        for i in range(len(batch)):
-            matrix_buffer.append(h[i])
-            subject_buffer.append(batch.iloc[i][subject_col])
-            stay_buffer.append(batch.iloc[i][stay_col])
-            if len(matrix_buffer) >= shard_size:
-                writer.write_shard(np.stack(matrix_buffer), subject_buffer, stay_buffer)
-                matrix_buffer, subject_buffer, stay_buffer = [], [], []
+    audit_path = Path(output_dir) / "evidence.jsonl"
+    if is_joint:
+        writer._flush_metadata()
+    with (audit_path.open("w", encoding="utf-8") if is_joint else nullcontext()) as audit:
+        for start in range(0, len(frame), batch_size):
+            batch = frame.iloc[start:start + batch_size]
+            h, traces, _ = builder.encode(batch[text_col].astype(str).tolist())
+            h = h.detach().float().cpu().numpy()
+            for i in range(len(batch)):
+                if audit is not None:
+                    audit.write(json.dumps({"row_index": start + i,
+                        "subject_id": _jsonable_id(batch.iloc[i][subject_col]),
+                        "stay_id": _jsonable_id(batch.iloc[i][stay_col]),
+                        "concept_evidence": traces[i]}, ensure_ascii=False, allow_nan=False) + "\n")
+                matrix_buffer.append(h[i])
+                subject_buffer.append(batch.iloc[i][subject_col])
+                stay_buffer.append(batch.iloc[i][stay_col])
+                if len(matrix_buffer) >= shard_size:
+                    writer.write_shard(np.stack(matrix_buffer), subject_buffer, stay_buffer)
+                    matrix_buffer, subject_buffer, stay_buffer = [], [], []
     if matrix_buffer:
         writer.write_shard(np.stack(matrix_buffer), subject_buffer, stay_buffer)
+    if is_joint:
+        writer.representation_pipeline = builder.projection_metadata()
+        writer.representation_pipeline.update(cache_build_complete=True, evidence_audit="evidence.jsonl")
     writer.close()
     return PatientMatrixDataset(output_dir)

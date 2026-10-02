@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.6.0 — 2026-10-03
+
+- Add opt-in `joint_evidence` matrices: independent chunk/prototype cosine ranking,
+  original-source evidence packing, frozen Qwen last-token + FP32 L2 joint encoding,
+  and direct shared linear projection `H_d[:,c] = W F(c,evidence_dc)`.
+- Bound chunks and final inputs in tokenizer tokens, preserve full concept text,
+  use deterministic ties/deduplication/source order, and audit selected/truncated
+  source spans. Do not cap evidence discovery to the old document prefix.
+- Do not subtract baselines/residuals, append prototypes, gate by scores, center
+  the projected input, or normalize output columns. Keep the old attention mode
+  as the cache builder default, and preserve existing MNGM/GRPO/retrieval logic.
+- Add a bounded 2..512-document diagnostic, exact training-row replay, production
+  baseline comparison with explicit scope differences, rank/covariance statistics,
+  blank human review templates, output hashes, and a graph-compatible sharded cache.
+- Track cache completion and reject partial new caches. Add server instructions,
+  synthetic instrumentation, token-budget/ordering/linear-map tests and integration
+  through cache loading and the existing MNGM solver. Real Qwen evidence quality
+  and downstream improvement remain to be measured on the server.
+
 ## v0.5.2 — 2026-10-01
 
 - Add a separate bounded five-probe attention-design command: absolute logit

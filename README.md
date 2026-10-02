@@ -1,4 +1,11 @@
-# Task-Guided Graph RL v0.5.2
+# Task-Guided Graph RL v0.6.0
+
+v0.6.0 新增可选的 concept + evidence 共同编码表示：从完整文章文本选出原文片段，
+用冻结 Qwen 编码 `F(concept, evidence)`，再直接共享线性投影得到 `H_d[R,P]`。
+不做 delta/双差、强度门控或投影后逐列归一化。提供 128 篇诊断和可直接交给
+现有 MNGM/GRPO 的独立 cache；旧 attention 入口继续作为默认对照。
+运行命令、具体函数和验证边界见
+[Joint evidence 新表示说明](docs/JOINT_EVIDENCE_REPRESENTATION.md)。
 
 v0.5.2 新增五组 attention 设计诊断：打分/温度、token 共同方向、value 范数、
 人工 concept 证据核验，以及句子/片段 pooled embedding 对照。复用训练样本和
