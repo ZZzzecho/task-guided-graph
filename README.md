@@ -1,4 +1,7 @@
-# Task-Guided Graph RL v0.6.0
+# Task-Guided Graph RL v0.6.1
+
+v0.6.1 修复 BF16 旧方法对照向量转 NumPy 时的异常，新增原生 BF16 编码器的
+完整诊断回归。失败后的重跑请指定新的 `OUTPUT_DIR`，不要复用不完整输出目录。
 
 v0.6.0 新增可选的 concept + evidence 共同编码表示：从完整文章文本选出原文片段，
 用冻结 Qwen 编码 `F(concept, evidence)`，再直接共享线性投影得到 `H_d[R,P]`。

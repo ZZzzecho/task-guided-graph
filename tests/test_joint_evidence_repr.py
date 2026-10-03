@@ -186,11 +186,22 @@ def test_diagnostic_synthetic_outputs_repeat_and_hashes_validate(tmp_path):
         main(["--synthetic", "--output-dir", str(tmp_path / "a")])
 
 
-def test_real_diagnostic_replay_inputs_trace_and_cache_use_one_encoder(tmp_path, monkeypatch):
+@pytest.mark.parametrize("native_dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("cache_dtype", ["float16", "float32"])
+def test_real_diagnostic_replay_inputs_trace_and_cache_use_one_encoder(tmp_path, monkeypatch, native_dtype, cache_dtype):
     import scripts.diagnose_joint_evidence as cli
     source = tmp_path / "train.csv"
     source.write_text("patent_id,text\na,Routing packet. Security key.\nb,Queue fairness.\nc,Other text.\n")
     encoder = TinyEncoder()
+    original_states = encoder.encode_token_states
+    original_pooled = encoder.encode_pooled
+    def native_states(texts):
+        states, mask = original_states(texts)
+        return states.to(native_dtype), mask
+    def native_pooled(texts, **kwargs):
+        return original_pooled(texts, **kwargs).to(native_dtype)
+    encoder.encode_token_states = native_states
+    encoder.encode_pooled = native_pooled
     protos = tmp_path / "prototypes.npz"
     save_concept_prototypes(protos, np.eye(4)[:3],
         ConceptVocabulary(("r", "s", "q"), ("routing", "security", "queue")), encoder_id="tiny")
@@ -208,12 +219,17 @@ def test_real_diagnostic_replay_inputs_trace_and_cache_use_one_encoder(tmp_path,
     output = tmp_path / "run"
     cli.main(["--train", str(source), "--prototypes", str(protos), "--model", "tiny",
         "--sample-manifest", str(prior), "--max-samples", "2", "--projection-file", str(projection),
-        "--representation-dim", "2", "--output-dir", str(output)])
+        "--representation-dim", "2", "--cache-dtype", cache_dtype, "--output-dir", str(output)])
     report = json.loads((output / "report.json").read_text())
     assert len(loaded) == 1
     assert report["sample_rows"] == [{"id": "a", "row_index": 0}, {"id": "c", "row_index": 2}]
     assert report["provenance"]["sampling"] == "exact_prior_training_rows"
     assert report["pipeline"]["residual_subtraction"] is False
+    assert report["pipeline"]["encoder_native_dtypes"] == [str(native_dtype)]
+    assert json.loads((output / "run_manifest.json").read_text())["status"] == "complete"
+    dataset = PatientMatrixDataset(output / "cache")
+    assert dataset.metadata["dtype"] == cache_dtype
+    assert np.isfinite(dataset.materialize()).all()
     audits = [json.loads(s) for s in (output / "evidence.jsonl").read_text().splitlines()]
     assert len(audits) == 2
     assert all(c["text"] == report_text[c["start"]:c["end"]]

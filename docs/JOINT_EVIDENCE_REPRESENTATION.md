@@ -1,5 +1,26 @@
 # v0.6.0: direct concept + evidence representation
 
+### v0.6.1 BF16 fix and restarting a failed run
+
+v0.6.0's legacy baseline could pass a BF16 tensor directly to NumPy, causing
+`TypeError: Got unsupported ScalarType BFloat16`. v0.6.1 converts to FP32 before
+NumPy, then applies the requested cache dtype. The representation formula and
+native model/attention dtype are unchanged. The `torch_dtype` deprecation message
+is a separate warning and did not cause this exception.
+
+The diagnostic does not resume partial runs. Keep the failed directory for
+inspection and rerun with a fresh output path:
+
+```bash
+git pull --ff-only origin main
+python -m pip install -e . --no-deps --no-build-isolation
+mkdir -p logs
+OUTPUT_DIR=outputs/joint_evidence_128_v061 \
+  nohup bash scripts/run_joint_evidence_h04l.sh \
+  > logs/joint_evidence_128_v061.log 2>&1 < /dev/null &
+echo $!
+```
+
 ## Agreed computation
 
 ```text

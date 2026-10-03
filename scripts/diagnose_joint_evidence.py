@@ -140,7 +140,7 @@ def main(argv=None):
                 h, full, traces = builder.encode_document(row["text"])
                 acc["joint_full"].add_tensor(full)
                 acc["projected"].add_tensor(h)
-                quantized = h.detach().cpu().numpy().astype(args.cache_dtype).astype(np.float32)
+                quantized = h.detach().float().cpu().numpy().astype(args.cache_dtype).astype(np.float32)
                 acc["cache_quantized"].add(quantized)
                 stored.append(quantized)
                 buffer.append(quantized[0])
@@ -171,7 +171,7 @@ def main(argv=None):
                     z, mask = encoder.encode_token_states([row["text"]])
                     bh, _, stages = baseline.from_hidden_states(z, mask, return_stages=True)
                     acc["baseline_token_full"].add_tensor(stages["h_full"])
-                    bq = bh.detach().cpu().numpy().astype(args.cache_dtype).astype(np.float32)
+                    bq = bh.detach().float().cpu().numpy().astype(args.cache_dtype).astype(np.float32)
                     acc["baseline_token_cache"].add(bq)
                     baseline_stored.append(bq)
                 if len(buffer) >= args.shard_size:

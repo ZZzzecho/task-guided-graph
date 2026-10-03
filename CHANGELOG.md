@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.6.1 — 2026-10-03
+
+- Convert diagnostic tensors to FP32 before NumPy conversion, including the
+  production token-attention baseline when Qwen runs natively in BF16. Apply the
+  requested cache dtype afterward; native attention and representation math stay
+  unchanged.
+- Exercise the full real-input diagnostic path with both FP32 and native BF16
+  encoder outputs, including baseline comparison, complete manifests and cache
+  reads. Document restarting failed jobs into a fresh output directory.
+
 ## v0.6.0 — 2026-10-03
 
 - Add opt-in `joint_evidence` matrices: independent chunk/prototype cosine ranking,
