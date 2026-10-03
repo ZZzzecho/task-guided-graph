@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.6.2 — 2026-10-03
+
+- Add an explicit full H04L joint-evidence entry point: up to six independently
+  ranked chunks from each document go together into the same F, with a 1024-token
+  input budget. Build 2048 matrices and reuse the existing full 8-phase retrieval
+  Graph-RL budget. Legacy CLI defaults and representation/graph math remain intact.
+- Record actual selected counts, evidence hashes, cache progress and a compact
+  source-span audit that reconstructs exact F inputs. Complete-cache reuse checks
+  build parameters, input hashes and cache contents; interrupted training has no
+  resume support and requires a fresh output directory.
+- Add training-only concept-only/top-1/matched/approximately length-matched donor
+  controls and evidence diversity across the entire cache. Donor evidence is
+  explicitly unlabeled. Diagnostic failure does not block full training.
+- Save initial/final effective concept-covariance spectra and representation
+  precision from the actual graph state, with no extra graph refit. These reports
+  do not establish resampling stability or a fixed-budget causal graph effect.
+
 ## v0.6.1 — 2026-10-03
 
 - Convert diagnostic tensors to FP32 before NumPy conversion, including the

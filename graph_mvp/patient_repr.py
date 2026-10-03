@@ -545,7 +545,8 @@ def build_patient_cache_from_frame(frame, builder: PatientConceptMatrixBuilder, 
                                    concept_ids, *, batch_size=8, shard_size=32,
                                    cache_dtype="float16", text_col="text",
                                    subject_col="subject_id", stay_col="stay_id",
-                                   encoder_id=DEFAULT_PATIENT_ENCODER, overwrite=False):
+                                   encoder_id=DEFAULT_PATIENT_ENCODER, overwrite=False,
+                                   compact_evidence_audit=False, progress_callback=None):
     """Build a sharded cache from a train DataFrame without ever storing all H in RAM."""
     required = {text_col, subject_col, stay_col}
     if not required.issubset(frame.columns):
@@ -560,7 +561,8 @@ def build_patient_cache_from_frame(frame, builder: PatientConceptMatrixBuilder, 
     is_joint = getattr(builder, "representation_mode", None) == "joint_evidence"
     pipeline = builder.projection_metadata()
     if is_joint:
-        pipeline.update(cache_build_complete=False, evidence_audit="evidence.jsonl")
+        pipeline.update(cache_build_complete=False, evidence_audit="evidence.jsonl",
+                        evidence_audit_format="source_spans_v1" if compact_evidence_audit else "full_v1")
     writer = PatientMatrixCacheWriter(
         output_dir, concept_ids, builder.hidden_size, dtype=cache_dtype,
         encoder_id=encoder_id, temperature=builder.temperature,
@@ -585,20 +587,33 @@ def build_patient_cache_from_frame(frame, builder: PatientConceptMatrixBuilder, 
             h = h.detach().float().cpu().numpy()
             for i in range(len(batch)):
                 if audit is not None:
+                    trace = traces[i]
+                    if compact_evidence_audit:
+                        # One source text per document; reconstruct exact inputs from spans.
+                        trace = [{k: v for k, v in row.items() if k not in ("input_text", "evidence_text", "chunks")}
+                                 | {"chunks": [{k: v for k, v in chunk.items() if k != "text"}
+                                               for chunk in row["chunks"]]} for row in trace]
                     audit.write(json.dumps({"row_index": start + i,
                         "subject_id": _jsonable_id(batch.iloc[i][subject_col]),
                         "stay_id": _jsonable_id(batch.iloc[i][stay_col]),
-                        "concept_evidence": traces[i]}, ensure_ascii=False, allow_nan=False) + "\n")
+                        **({"source_text": str(batch.iloc[i][text_col])} if compact_evidence_audit else {}),
+                        "concept_evidence": trace}, ensure_ascii=False, allow_nan=False) + "\n")
                 matrix_buffer.append(h[i])
                 subject_buffer.append(batch.iloc[i][subject_col])
                 stay_buffer.append(batch.iloc[i][stay_col])
                 if len(matrix_buffer) >= shard_size:
                     writer.write_shard(np.stack(matrix_buffer), subject_buffer, stay_buffer)
                     matrix_buffer, subject_buffer, stay_buffer = [], [], []
+            if audit is not None:
+                audit.flush()
+            if progress_callback is not None:
+                progress_callback({"documents_done": min(start + len(batch), len(frame)),
+                                   "documents_total": len(frame), "persisted_documents": writer.n_samples})
     if matrix_buffer:
         writer.write_shard(np.stack(matrix_buffer), subject_buffer, stay_buffer)
     if is_joint:
         writer.representation_pipeline = builder.projection_metadata()
-        writer.representation_pipeline.update(cache_build_complete=True, evidence_audit="evidence.jsonl")
+        writer.representation_pipeline.update(cache_build_complete=True, evidence_audit="evidence.jsonl",
+            evidence_audit_format="source_spans_v1" if compact_evidence_audit else "full_v1")
     writer.close()
     return PatientMatrixDataset(output_dir)

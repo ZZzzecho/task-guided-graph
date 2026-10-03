@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 from graph_mvp.patient_repr import (
@@ -75,6 +76,8 @@ def main(argv=None):
     )
     p.add_argument("--flash-attention", action="store_true")
     p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--compact-evidence-audit", action="store_true",
+                   help="Joint mode: save source text once with exact evidence spans")
     args = p.parse_args(argv)
 
     try:
@@ -148,6 +151,13 @@ def main(argv=None):
         frame["_sample_id"] = range(len(frame))
         subject_col = stay_col = "_sample_id"
 
+    began = time.perf_counter()
+    def progress(info):
+        done, total = info["documents_done"], info["documents_total"]
+        elapsed = time.perf_counter() - began
+        print(f"[cache] {done}/{total} documents; persisted={info['persisted_documents']} "
+              f"elapsed={elapsed:.1f}s ETA={(elapsed / done) * (total - done):.1f}s", flush=True)
+
     ds = build_patient_cache_from_frame(
         frame,
         builder,
@@ -161,6 +171,8 @@ def main(argv=None):
         stay_col=stay_col,
         encoder_id=args.model,
         overwrite=args.overwrite,
+        compact_evidence_audit=args.compact_evidence_audit,
+        progress_callback=progress,
     )
     print(
         f"cached n={len(ds)} "

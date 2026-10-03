@@ -1,4 +1,10 @@
-# Task-Guided Graph RL v0.6.1
+# Task-Guided Graph RL v0.6.2
+
+v0.6.2 增加完整 joint-evidence 实验入口：同一文章为每个 concept 最多选 6 个
+原文片段，一起进入 F，输入上限 1024 tokens；默认重建 2048 篇 cache 后接
+原有 8 阶段 Graph-RL。附带证据共享/F 对照、实际 MNGM covariance 诊断、
+精简可复原证据日志和进度。旧表示默认值不变；不引入前后文扩展或新的残差公式。
+后台命令和输出说明见 [完整训练说明](docs/JOINT_EVIDENCE_FULL_RUN.md)。
 
 v0.6.1 修复 BF16 旧方法对照向量转 NumPy 时的异常，新增原生 BF16 编码器的
 完整诊断回归。失败后的重跑请指定新的 `OUTPUT_DIR`，不要复用不完整输出目录。

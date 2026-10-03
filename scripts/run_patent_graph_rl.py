@@ -270,7 +270,21 @@ def _save_graph(path, state):
         Theta=s.Theta,
         partial_corr=s.Rho,
         adjacency=s.A,
+        representation_precision=s.auxiliary.get("representation_precision", np.empty((0, 0))),
     )
+
+
+def _covariance_report(state):
+    """Audit actual effective covariance stored by the solver; no refit."""
+    from graph_mvp.representation_diagnostics import correlation, distribution, spectrum
+    s = state.snapshot
+    b = s.auxiliary.get("representation_precision")
+    return {"concept_covariance": spectrum(s.S),
+            "pairwise_correlation": distribution(correlation(s.S)[np.triu_indices(len(s.S), 1)]),
+            "representation_precision": None if b is None else spectrum(b),
+            "graph_metrics": graph_metrics(s), "solver_info": state.solver_info,
+            "interpretation": "Actual effective covariance includes solver eigenvalue floor; initial B=I, "
+                              "final B is the accepted state. No resampling stability claim."}
 
 
 def main():
@@ -375,6 +389,8 @@ def main():
     )
     print(f"Initial graph: {graph_metrics(state0.snapshot)}", flush=True)
     _save_graph(args.output / "initial_graph.npz", state0)
+    _safe_analysis_log("initial effective covariance", lambda: _write_json(
+        args.output / "mngm" / "initial_covariance_diagnostics.json", _covariance_report(state0)))
     _write_json(args.output / "mngm" / "initial_summary.json", {
         "shape": list(matrices.shape),
         "initial_lambda": lam0,
@@ -634,6 +650,8 @@ def main():
     )
 
     _save_graph(args.output / "final_graph.npz", result.final_state)
+    _safe_analysis_log("final effective covariance", lambda: _write_json(
+        args.output / "mngm" / "final_covariance_diagnostics.json", _covariance_report(result.final_state)))
     policy.save(args.output / "graph_policy.pt")
     torch.save(graph_tokenizer.state_dict(), args.output / "soft_graph_tokenizer.pt")
     if hasattr(task_lm, "save_pretrained"):

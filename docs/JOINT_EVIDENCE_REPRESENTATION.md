@@ -1,5 +1,9 @@
 # v0.6.0: direct concept + evidence representation
 
+For the v0.6.2 expanded-excerpt full experiment (top-6, 1024 F tokens, 2048 graph
+documents and 8 training phases), see [full run instructions](JOINT_EVIDENCE_FULL_RUN.md).
+The bounded commands below retain their original diagnostic defaults.
+
 ### v0.6.1 BF16 fix and restarting a failed run
 
 v0.6.0's legacy baseline could pass a BF16 tensor directly to NumPy, causing

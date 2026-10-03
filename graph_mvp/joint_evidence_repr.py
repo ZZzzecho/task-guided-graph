@@ -108,6 +108,8 @@ def select_and_pack_evidence(concept, chunks, scores, tokenizer, *, top_k=3, max
     evidence = "\n\n".join(x["text"] for x in chosen)
     packed = format_joint_input(concept, evidence)
     return {"evidence_text": evidence, "input_text": packed, "chunks": chosen,
+            "requested_top_k": int(top_k), "selected_chunk_count": len(chosen),
+            "evidence_sha256": sha256(evidence.encode("utf-8")).hexdigest(),
             "input_tokens": token_count(tokenizer, packed), "candidate_chunks": len(chunks),
             "max_score": float(scores.max()), "mean_score": float(scores.mean()),
             "truncated": any(x["truncated"] for x in chosen),
