@@ -1,4 +1,10 @@
-# Task-Guided Graph RL v0.6.2
+# Task-Guided Graph RL v0.6.3
+
+v0.6.3 新增长文本候选池与独立学图入口：为上一轮相同的 2048 篇专利补充概要、
+权利要求和详细说明，将每篇候选文本限制为 4096 个 Qwen tokens，继续使用
+128-token 分片、top-6 和 1024-token 联合输入。只构建冻结 H 并拟合 MNGM 图，
+不启动第二阶段任务训练。全量记录证据多样性、prototype 相似度及协方差/图变化。
+Git 拉取和服务器运行说明见 [长文本学图说明](docs/PATENT_LONGTEXT_GRAPH.md)。
 
 v0.6.2 增加完整 joint-evidence 实验入口：同一文章为每个 concept 最多选 6 个
 原文片段，一起进入 F，输入上限 1024 tokens；默认重建 2048 篇 cache 后接

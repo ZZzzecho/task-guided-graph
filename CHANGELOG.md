@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.3 — 2026-10-04
+
+- Add a graph-only H04L entry point for the same 2048 training patents, joining
+  same-snapshot granted summary, claims and description by patent ID/year.
+- Bound the complete candidate text to 4096 Qwen tokens with section-balanced
+  original excerpts. Keep 128-token chunks, top-6 and the 1024-token joint input.
+- Collect full-scale evidence diversity, native/projected prototype and empty-
+  evidence cosines, CUDA peaks, covariance diagnostics and paired initial graphs.
+- Fit B=I initialization and one fixed-lambda alternating MNGM graph. No task
+  model, LoRA, GRPO, retrieval evaluation or server pilot is launched.
+- Record Git revision and code/input hashes; document branch-based server setup.
+
 ## v0.6.2 — 2026-10-03
 
 - Add an explicit full H04L joint-evidence entry point: up to six independently
