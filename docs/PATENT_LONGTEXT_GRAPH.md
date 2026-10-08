@@ -59,6 +59,26 @@ tail -f outputs/patent_longtext_graph_n2048_b4096_k6_v063/graph.log
 
 ## 执行与诊断
 
+初始 Glasso 达到迭代上限后，可以用 `scripts.diagnose_patent_glasso_convergence`
+对完整 H 缓存单独检查收敛趋势。它校验缓存和原配置，仅增加数值迭代预算，
+保留 λ=0.8、B=I、rho、残差和 KKT 标准；不重新做 GPU 编码，也不运行交替
+MNGM 或第二阶段。使用新的输出目录，例如：
+
+```bash
+python -u -m scripts.diagnose_patent_glasso_convergence \
+  --cache outputs/<原实验>/cache \
+  --reference-experiment outputs/joint_evidence_full_n2048_k6_v062 \
+  --config configs/patient_h04l_main_v1.json \
+  --output outputs/<新诊断目录> --max-iter 6000 --diagnostic-every 250
+```
+
+`loss_trace.jsonl` 记录正定 ADMM 变量 X 的原始目标、稀疏变量 Z 在正定时的
+原始目标、最小特征值、KKT、primal/dual 及其阈值。目标含无向边的 L1 惩罚，
+不是下游检索 loss。稀疏变量不正定时其目标/KKT 为 null。诊断为可选观察，
+不改变 ADMM 迭代或停止规则；测试验证开关诊断后求解结果逐位相同。
+ADMM 目标不要求逐步单调，最终仍须通过残差、正定性和 KKT 检查。
+只有实际收敛时才保存 `initial_graph_diagnostic.npz`；这不代表交替 MNGM 已完成。
+
 1. 读取已完成 v0.6.2 cache 的真实样本 ID 和顺序；准备对应 2048 篇的有限长文本。
 2. 为全部文档/800 个概念构建 H，记录全部证据多样性，以及原始 Qwen 空间和投影空间中对 prototype、空证据同模板表示的余弦。旧缓存的投影空间指标按同一基线重算，无需重复旧 Qwen 编码。旧原始 Qwen 全空间向量未保存，不能直接补算。
 3. 保持旧 λ=0.8 和 MNGM/weighted Glasso 配置，先用 B=I 拟合 G0（与旧 initial_graph 可比），再运行一次固定 λ 的交替 MNGM 拟合。CPU 求解算法和线程设置不改。

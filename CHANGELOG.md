@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.3 initial-solver diagnostics — 2026-10-08
+
+- Add opt-in objective/SPD/KKT and stopping-threshold observations to weighted
+  Glasso without changing ADMM updates or acceptance checks.
+- Replay B=I initial graph from verified complete H caches with an explicit
+  larger iteration budget, preserving lambda0.8 and all numerical tolerances.
+- Save sampled loss traces and publish diagnostic graphs only after actual
+  convergence; this check does not launch alternating MNGM or task training.
+
 ## v0.6.3 download recovery — 2026-10-08
 
 - Resume short original-text archives after EOF/timeouts; continue valid HTTP
