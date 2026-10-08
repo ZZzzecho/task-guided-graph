@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.3 download recovery — 2026-10-08
+
+- Resume short original-text archives after EOF/timeouts; continue valid HTTP
+  206 segments without treating each successful segment as a failed attempt.
+- Validate full range boundaries and totals before appending. Preserve corrupt
+  partial files under unique names and retry; publish only checksum-valid ZIPs.
+- Log received/expected bytes and checksums, and document restarting into a new
+  experiment directory while retaining completed downloads and failure logs.
+
 ## v0.6.3 — 2026-10-04
 
 - Add a graph-only H04L entry point for the same 2048 training patents, joining

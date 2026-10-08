@@ -179,7 +179,7 @@ def request_json(url):
             time.sleep(2*(attempt+1))
 
 def ensure_archive(directory, record, name, file_info):
-    """Checksummed, resumable download. Existing wrong complete files fail."""
+    """Resume incomplete transfers; quarantine corrupt partials, never publish them."""
     directory = Path(directory)
     directory.mkdir(parents=True,exist_ok=True)
     target = directory/name
@@ -191,38 +191,67 @@ def ensure_archive(directory, record, name, file_info):
         return target
     part = directory/(name+'.part')
     url = f'https://zenodo.org/records/{record}/files/{name}?download=1'
+    def quarantine(reason):
+        saved = part.with_name(part.name+f'.invalid.{time.time_ns()}')
+        part.rename(saved)
+        print(f'[download] {reason}; preserved as {saved}; restarting from byte 0',flush=True)
+
+    last_error = None
     for attempt in range(3):
-        offset = part.stat().st_size if part.exists() else 0
-        if offset > size:
-            raise ValueError(f'Partial download larger than expected: {part}')
-        if offset == size:
-            break
-        headers = {'User-Agent':'PatentsViewGraph/0.6.3'}
-        if offset:
-            headers['Range'] = f'bytes={offset}-'
         try:
-            with urllib.request.urlopen(urllib.request.Request(url,headers=headers),timeout=120) as response:
-                if offset and response.status == 206:
-                    if not response.headers.get('Content-Range','').startswith(f'bytes {offset}-'):
-                        raise ValueError('Server returned incorrect resume offset')
-                    mode = 'ab'
-                elif response.status == 200:
-                    mode = 'wb'
-                else:
-                    raise ValueError(f'Unexpected download status {response.status}')
-                with part.open(mode) as stream:
-                    while block := response.read(1024*1024):
-                        stream.write(block)
-            if part.stat().st_size == size:
-                break
-        except Exception:
-            if attempt == 2:
-                raise
-            time.sleep(2*(attempt+1))
-    if part.stat().st_size != size or digest(part,algorithm) != expected:
-        raise ValueError(f'Download size/checksum mismatch: {part}')
-    part.rename(target)
-    return target
+            offset = part.stat().st_size if part.exists() else 0
+            if offset > size:
+                quarantine(f'Partial size {offset} exceeds expected {size}')
+                offset = 0
+            while offset < size:
+                headers = {'User-Agent':'PatentsViewGraph/0.6.3',
+                    'Accept-Encoding':'identity','Cache-Control':'no-cache'}
+                if offset:
+                    headers['Range'] = f'bytes={offset}-'
+                print(f'[download] {name}: attempt {attempt+1}/3, bytes {offset}/{size}',flush=True)
+                with urllib.request.urlopen(urllib.request.Request(url,headers=headers),timeout=120) as response:
+                    if response.status == 206:
+                        match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)',response.headers.get('Content-Range',''))
+                        if not match:
+                            raise ValueError('Invalid or missing Content-Range')
+                        start,end,total = map(int,match.groups())
+                        if start != offset or total != size or not start <= end < total:
+                            raise ValueError(f'Unexpected Content-Range: {response.headers.get("Content-Range")}; '
+                                f'expected offset {offset}, total {size}')
+                        mode, response_end = 'ab', end+1
+                    elif response.status == 200:
+                        # A server may ignore Range; restart rather than append a full file.
+                        mode, offset, response_end = 'wb', 0, size
+                    else:
+                        raise ValueError(f'Unexpected download status {response.status}')
+                    length = response.headers.get('Content-Length')
+                    if length is not None and int(length) != response_end-offset:
+                        raise ValueError(f'Unexpected Content-Length {length}; expected {response_end-offset}')
+                    with part.open(mode) as stream:
+                        while block := response.read(1024*1024):
+                            if offset+len(block) > response_end:
+                                raise ValueError('Response body exceeds declared archive/range size')
+                            stream.write(block)
+                            offset += len(block)
+                    if offset != response_end:
+                        raise ValueError(f'Incomplete response: received through byte {offset}, expected {response_end}')
+                # A valid 206 may cover only part of the requested suffix. Keep resuming
+                # successful ranges without spending the transport failure retry budget.
+            actual = digest(part,algorithm)
+            if actual != expected:
+                quarantine(f'{algorithm} mismatch: expected {expected}, received {actual} ({size} bytes)')
+                raise ValueError(f'Archive {algorithm} mismatch: expected {expected}, received {actual}')
+            part.rename(target)
+            print(f'[download] verified {name}: {size} bytes, {algorithm}:{expected}',flush=True)
+            return target
+        except Exception as exc:
+            last_error = exc
+            received = part.stat().st_size if part.exists() else 0
+            print(f'[download] {name}: attempt {attempt+1}/3 failed, partial bytes {received}/{size}: {exc}',flush=True)
+            if attempt < 2:
+                time.sleep(2*(attempt+1))
+    raise ValueError(f'Download failed after 3 attempts: {part}; '
+        f'expected {size} bytes, {algorithm}:{expected}; last error: {last_error}') from last_error
 
 def load_sections(paths, patent_years):
     """Join granted text only, by exact grant ID and grant year, preserving order."""

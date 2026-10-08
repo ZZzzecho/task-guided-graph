@@ -15,6 +15,21 @@ bash scripts/run_patent_longtext_graph_only.sh
 
 如果本地已有该分支，使用 `git switch feat/patent-longtext-graph-only`，再执行 `git pull --ff-only`。入口记录实际 Git commit 和关键代码校验和，并验证已完成 v0.6.2 的输入与缓存校验和，发现数据不匹配就停止。首次运行自动下载所需授权年份的三类长文本文件到独立原始数据目录；下载校验和来自 Zenodo 文件元数据，支持中断下载续传。GPU 建缓存或拟图中断不支持部分缓存/阶段续跑，需要另选新的输出目录；完整下载的原始 ZIP 可以复用。
 
+准备阶段下载失败后，保留原运行日志和原始数据目录。短的 `.part` 文件从已下载字节续传；完整但校验和不匹配或超长的 `.part` 文件改名为 `.part.invalid.<时间戳>` 保留后重新下载。完整 ZIP 必须通过原始元数据的大小和校验和检查才会使用；已通过检查的 ZIP 不会重复下载。HTTP 206 必须匹配续传位置和元数据总大小，成功的分段响应可以连续续传，传输/校验失败最多重试三次。错误日志包含实际字节数和预期大小/校验和。
+
+更新分支后，使用新的实验输出目录和日志名重启（旧启动脚本的固定日志/PID 名会阻止重复启动）：
+
+```bash
+git switch feat/patent-longtext-graph-only
+git pull --ff-only
+mkdir -p outputs
+run_name="patent_longtext_graph_n2048_b4096_k6_v063_retry_$(date +%Y%m%d_%H%M%S)"
+nohup python -u -m scripts.run_patent_longtext_graph --output "outputs/$run_name" > "outputs/$run_name.launch.log" 2>&1 < /dev/null &
+tail -f "outputs/$run_name.launch.log"
+```
+
+这会从准备阶段重新运行，复用已下载的原始 ZIP/部分下载；不会恢复旧的模型缓存或拟图阶段。报告文件名相应变为 `outputs/${run_name}_reports.tar.gz`。
+
 日志：
 
 ```bash
