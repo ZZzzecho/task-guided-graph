@@ -1,12 +1,13 @@
 """Fit initial/fixed-lambda MNGM graphs; no task model, LoRA, or GRPO loop."""
 from __future__ import annotations
-import argparse, json, time
+import argparse, json, subprocess, time
+from dataclasses import asdict, replace
 from pathlib import Path
 import numpy as np
 from graph_mvp.config import Config
 from graph_mvp.estimators import MNGMEstimator,PATIENT_MATRIX_MODE
 from graph_mvp.patient_repr import PatientMatrixDataset
-from graph_mvp.patent_longtext import digest,write_json
+from graph_mvp.patent_longtext import cache_ids,code_digest,digest,write_json
 from graph_mvp.representation_diagnostics import spectrum,correlation,distribution
 from graph_mvp.weighted_glasso import penalty_matrix
 from scripts.build_patent_longtext_matrices import evidence_diversity
@@ -28,19 +29,7 @@ def graph_difference(new,old):
         'theta_difference_frobenius':float(np.linalg.norm(new-old,'fro')),
         'note':'Same lambda/IDs/projection; descriptive graph change, not resampling stability or task improvement.'}
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description=__doc__)
-    for key in ('cache','reference-experiment','config','output'):
-        p.add_argument('--'+key,type=Path,required=True)
-    p.add_argument('--initial-lambda',type=float,default=.8)
-    args = p.parse_args(argv)
-    if args.output.exists():
-        p.error('Choose a new graph output')
-    args.output.mkdir(parents=True)
-    config = Config.load(args.config)
-    reference_manifest = json.loads((args.reference_experiment/'experiment_manifest.json').read_text(encoding='utf-8'))
-    if digest(args.config) != reference_manifest['input_hashes']['config']:
-        raise ValueError('MNGM configuration changed from reference')
+def fit_graph(args,config):
     ds = PatientMatrixDataset(args.cache)
     reference = PatientMatrixDataset(args.reference_experiment/'cache')
     if ds.concept_ids != reference.concept_ids or ds.hidden_size != reference.hidden_size or len(ds)!=len(reference):
@@ -69,6 +58,10 @@ def main(argv=None):
     del x
     penalty = penalty_matrix(ds.num_concepts,args.initial_lambda)
     def progress(info):
+        with (args.output/'progress.jsonl').open('a',encoding='utf-8') as stream:
+            # Representation CD has no primal residual; JSON stores missing values as null.
+            row = {k:None if isinstance(v,float) and not np.isfinite(v) else v for k,v in info.items()}
+            stream.write(json.dumps({**row,'seconds':time.monotonic()-began},allow_nan=False)+'\n')
         if info['stage']=='mngm_outer':
             print(f"[MNGM] outer {info['iteration']}/{info['max_iter']}",flush=True)
         else:
@@ -93,6 +86,7 @@ def main(argv=None):
     old_cov = json.loads((args.reference_experiment/'training/mngm/initial_covariance_diagnostics.json').read_text(encoding='utf-8'))
     summary = {'status':'initial_complete','documents':len(ds),'representation_dim':ds.hidden_size,
         'concepts':ds.num_concepts,'lambda':args.initial_lambda,'initial':initial.info(),
+        'effective_solver':asdict(config.solver),'mngm_config':asdict(config.mngm),
         'initial_graph_vs_old_initial_graph':initial_diff,'initial_covariance_new':initial_cov,
         'initial_covariance_old':old_cov,'task_training_performed':False,'grpo_updates':0,
         'scope':'Initial B=I graph plus one fixed-lambda alternating MNGM fit; no task reward or evaluation'}
@@ -109,6 +103,56 @@ def main(argv=None):
     if not fitted.converged:
         raise RuntimeError(f'Fixed-lambda MNGM failed: {fitted.message}; initial graph retained')
     print('[graph] complete; second-stage training was not started',flush=True)
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__)
+    for key in ('cache','reference-experiment','config','output'):
+        p.add_argument('--'+key,type=Path,required=True)
+    p.add_argument('--initial-lambda',type=float,default=.8)
+    p.add_argument('--solver-max-iter',type=int,help='Explicitly increase the inner solver budget; keep all original tolerances')
+    args = p.parse_args(argv)
+    if args.output.exists():
+        p.error('Choose a new graph output')
+    config = Config.load(args.config)
+    original_solver = asdict(config.solver)
+    reference_manifest = json.loads((args.reference_experiment/'experiment_manifest.json').read_text(encoding='utf-8'))
+    if digest(args.config) != reference_manifest['input_hashes']['config']:
+        raise ValueError('MNGM configuration changed from reference')
+    if args.solver_max_iter is not None:
+        if args.solver_max_iter < config.solver.max_iter:
+            p.error('--solver-max-iter must be at least the original solver budget')
+        config = replace(config,solver=replace(config.solver,max_iter=args.solver_max_iter))
+    new_ids,_ = cache_ids(args.cache)
+    old_ids,_ = cache_ids(args.reference_experiment/'cache')
+    if new_ids != old_ids:
+        raise ValueError('New/reference cache document IDs/order differ')
+    for cache in (args.cache,args.reference_experiment/'cache'):
+        integrity = json.loads((cache/'build_integrity.json').read_text(encoding='utf-8'))
+        for name,expected in integrity.items():
+            if digest(cache/name) != expected:
+                raise ValueError(f'Cache checksum mismatch: {cache/name}')
+    root = Path(__file__).resolve().parents[1]
+    revision = subprocess.run(['git','rev-parse','HEAD'],cwd=root,capture_output=True,text=True,check=False)
+    manifest = {'status':'running','git_sha':revision.stdout.strip() if revision.returncode==0 else None,
+        'cache':str(args.cache.resolve()),'reference_experiment':str(args.reference_experiment.resolve()),
+        'config_sha256':digest(args.config),'cache_integrity_sha256':digest(args.cache/'build_integrity.json'),
+        'original_solver':original_solver,'effective_solver':asdict(config.solver),
+        'mngm_config':asdict(config.mngm),'initial_lambda':args.initial_lambda,'documents':len(new_ids),
+        'source_sha256':{name:code_digest(root/name) for name in
+            ('scripts/fit_patent_longtext_graph.py','graph_mvp/estimators.py','graph_mvp/weighted_glasso.py')},
+        'task_training_performed':False,'grpo_updates':0,'gpu_encoding_performed':False}
+    args.output.mkdir(parents=True)
+    write_json(args.output/'run_manifest.json',manifest)
+    began = time.monotonic()
+    try:
+        fit_graph(args,config)
+        manifest['status'] = 'complete'
+    except Exception as exc:
+        manifest.update(status='failed',error=f'{type(exc).__name__}: {exc}')
+        raise
+    finally:
+        manifest['seconds'] = time.monotonic()-began
+        write_json(args.output/'run_manifest.json',manifest)
 
 if __name__ == '__main__':
     main()

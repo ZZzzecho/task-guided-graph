@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.3 graph-only continuation — 2026-10-09
+
+- Fit from verified complete H caches with an explicit increased inner iteration
+  budget; preserve the original config checksum, lambda and all convergence tolerances.
+- Record effective numerical settings, streamed progress and final/failed run status
+  separately from the original experiment. Refit B=I and alternate fixed-lambda MNGM
+  without GPU encoding, task training, LoRA or GRPO.
+
 ## v0.6.3 initial-solver diagnostics — 2026-10-08
 
 - Add opt-in objective/SPD/KKT and stopping-threshold observations to weighted

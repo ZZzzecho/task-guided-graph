@@ -103,7 +103,8 @@ def test_reference_ids_are_verified_and_corruption_fails(tmp_path):
     with pytest.raises(ValueError,match='checksum'):
         cache_ids(cache)
 
-def test_full_cache_build_diagnostics_and_compact_evidence_match_direct_F(tmp_path,monkeypatch):
+@pytest.mark.parametrize('solver_budget',[None,1200])
+def test_full_cache_build_diagnostics_and_compact_evidence_match_direct_F(tmp_path,monkeypatch,solver_budget):
     import scripts.build_patent_longtext_matrices as build
     cache,source,prototypes,projection,builder=make_reference(tmp_path)
     monkeypatch.setattr(build,'Qwen3EmbeddingEncoder',lambda *a,**kw:SyntheticJointEncoder(kw['max_length']))
@@ -155,13 +156,36 @@ def test_full_cache_build_diagnostics_and_compact_evidence_match_direct_F(tmp_pa
     write_json(training/'mngm/initial_covariance_diagnostics.json',covariance_report(initial.S))
     write_json(cache.parent/'experiment_manifest.json',{'input_hashes':{'config':digest(config)}})
     graph_out=tmp_path/'new-graph'
-    fit(['--cache',str(output),'--reference-experiment',str(cache.parent),'--config',str(config),'--output',str(graph_out)])
+    fit_args=['--cache',str(output),'--reference-experiment',str(cache.parent),'--config',str(config),'--output',str(graph_out)]
+    if solver_budget is not None:
+        fit_args+=['--solver-max-iter',str(solver_budget)]
+    fit(fit_args)
     result=json.loads((graph_out/'summary.json').read_text())
     assert result['status']=='complete' and result['grpo_updates']==0
     assert result['task_training_performed'] is False
     assert (graph_out/'initial_graph.npz').exists() and (graph_out/'fitted_graph.npz').exists()
     paired=json.loads((graph_out/'evidence_comparison.json').read_text())
     assert len(paired['paired_documents'])==6
+    manifest=json.loads((graph_out/'run_manifest.json').read_text())
+    assert manifest['status']=='complete' and manifest['documents']==6
+    assert manifest['original_solver']['max_iter']==1000
+    assert manifest['effective_solver']['max_iter']==(solver_budget or 1000)
+    assert all(manifest['original_solver'][k]==manifest['effective_solver'][k]
+        for k in manifest['original_solver'] if k!='max_iter')
+    assert digest(config)==manifest['config_sha256']
+    assert manifest['gpu_encoding_performed'] is False
+    progress=[json.loads(line) for line in (graph_out/'progress.jsonl').read_text().splitlines()]
+    assert any(row['stage']=='mngm_outer' for row in progress)
+    # Budget overrides cannot bypass original-config or cached-input checks.
+    blocked=tmp_path/'blocked-graph'
+    fit_args[fit_args.index('--output')+1]=str(blocked)
+    with pytest.raises(SystemExit):
+        fit(fit_args+['--solver-max-iter','999'])
+    assert not blocked.exists()
+    (output/'shard_00000.npy').write_bytes(b'corrupt cached matrix')
+    with pytest.raises(ValueError,match='checksum mismatch'):
+        fit(fit_args)
+    assert not blocked.exists()
 
 def test_graph_only_command_plan_has_no_second_stage_or_pilot(tmp_path):
     from scripts.run_patent_longtext_graph import commands

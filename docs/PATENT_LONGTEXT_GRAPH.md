@@ -59,6 +59,27 @@ tail -f outputs/patent_longtext_graph_n2048_b4096_k6_v063/graph.log
 
 ## 执行与诊断
 
+完整 H 已构建、初始求解因上限不足停止时，可以直接继续学图，无需重做准备或 GPU 编码。
+2026-10-08 对同2048篇的诊断保持 λ=0.8、rho 和全部容差不变，在第7997次通过全部原定检查。
+续跑入口显式记录原始/实际 solver 配置，并校验两个完整缓存的校验和与样本顺序。
+`--solver-max-iter` 仅允许增加数值求解预算；交替轮数12、λ 和停止标准仍用原配置：
+
+```bash
+run_name="patent_longtext_graph_fit_$(date +%Y%m%d_%H%M%S)"
+nohup python -u -m scripts.fit_patent_longtext_graph \
+  --cache outputs/<已完成H的实验>/cache \
+  --reference-experiment outputs/joint_evidence_full_n2048_k6_v062 \
+  --config configs/patient_h04l_main_v1.json \
+  --output "outputs/$run_name" --initial-lambda 0.8 --solver-max-iter 10000 \
+  > "outputs/$run_name.launch.log" 2>&1 < /dev/null &
+echo $! > "outputs/$run_name.pid"
+```
+
+本入口重新求初始图，然后运行固定 λ 的交替 MNGM。它复用完整 H，不恢复 ADMM 中间变量，
+也不启动第二阶段。独立输出的 `run_manifest.json` 记录执行状态、代码/缓存身份和求解预算；
+`progress.jsonl` 记录各轮与子问题残差，`summary.json` 和图矩阵仅按实际收敛状态发布。
+初始解成功并不保证交替拟合收敛；失败时保留初始图和失败摘要。
+
 初始 Glasso 达到迭代上限后，可以用 `scripts.diagnose_patent_glasso_convergence`
 对完整 H 缓存单独检查收敛趋势。它校验缓存和原配置，仅增加数值迭代预算，
 保留 λ=0.8、B=I、rho、残差和 KKT 标准；不重新做 GPU 编码，也不运行交替
