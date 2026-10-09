@@ -106,6 +106,9 @@ def test_reference_ids_are_verified_and_corruption_fails(tmp_path):
 @pytest.mark.parametrize('solver_budget',[None,1200])
 def test_full_cache_build_diagnostics_and_compact_evidence_match_direct_F(tmp_path,monkeypatch,solver_budget):
     import scripts.build_patent_longtext_matrices as build
+    import torch
+    # SyntheticJointEncoder is CPU-only even when the test host has a GPU.
+    monkeypatch.setattr(torch.cuda,'is_available',lambda:False)
     cache,source,prototypes,projection,builder=make_reference(tmp_path)
     monkeypatch.setattr(build,'Qwen3EmbeddingEncoder',lambda *a,**kw:SyntheticJointEncoder(kw['max_length']))
     prepared=tmp_path/'prepared';prepared.mkdir()
