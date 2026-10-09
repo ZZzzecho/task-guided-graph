@@ -171,11 +171,42 @@ class GraphState:
 
 
 @dataclass(frozen=True, eq=False)
+class LinearPenaltyAction:
+    """One low-dimensional action; upper-triangle changes are deterministic.
+
+    log_prob counts coefficient choices once, never the expanded concept pairs.
+    delta is dimensionless; the environment applies its existing eta and bounds.
+    """
+    candidate_id: str
+    state_id: str
+    coefficients: tuple[float, ...]
+    delta: np.ndarray
+    num_concepts: int
+    log_prob: float
+    policy_version: str
+
+    def __post_init__(self):
+        if not isinstance(self.num_concepts, int) or self.num_concepts < 2:
+            raise ValueError("Linear action requires at least two concepts")
+        a = np.asarray(self.delta, dtype=float)
+        if (a.shape != (self.num_concepts * (self.num_concepts - 1) // 2,)
+                or not np.isfinite(a).all() or np.any(np.abs(a) > 1 + 1e-12)):
+            raise ValueError("Linear delta must be a bounded finite upper triangle")
+        if (len(self.coefficients) != 8 or not np.isfinite(self.coefficients).all()
+                or np.any(np.abs(self.coefficients) > 1)):
+            raise ValueError("Linear action requires eight bounded finite coefficients")
+        if not np.isfinite(self.log_prob) or self.log_prob > 1e-12:
+            raise ValueError("Linear action log_prob must be finite and <= 0")
+        object.__setattr__(self, "coefficients", tuple(self.coefficients))
+        object.__setattr__(self, "delta", readonly(a))
+
+
+@dataclass(frozen=True, eq=False)
 class GraphCandidate:
     candidate_id: str
     parent_state_id: str
     snapshot: GraphSnapshot | None
-    action: ActionRecord | ActionGroup
+    action: ActionRecord | ActionGroup | LinearPenaltyAction
     solver_info: Mapping[str, Any]
     graph_metrics: Mapping[str, float]
     valid: bool
@@ -224,10 +255,19 @@ class PolicyInput:
     state_id: str
     candidate_edges: tuple[EdgeFeatures, ...]
     global_features: Mapping[str, float] = field(default_factory=dict)
+    linear_features: np.ndarray | None = None
+    num_concepts: int | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "candidate_edges", tuple(self.candidate_edges))
         object.__setattr__(self, "global_features", freeze(self.global_features))
+        if self.linear_features is not None:
+            a = np.asarray(self.linear_features, dtype=np.float32)
+            p = self.num_concepts
+            if (p is None or p < 2 or a.shape != (p * (p - 1) // 2, 8)
+                    or not np.isfinite(a).all()):
+                raise ValueError("Linear features must be finite [P choose 2, 8]")
+            object.__setattr__(self, "linear_features", readonly(a, np.float32))
 
 
 @dataclass(frozen=True, eq=False)

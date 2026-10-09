@@ -6,7 +6,7 @@ import time
 import numpy as np
 
 from .types import (GraphState, GraphCandidate, PolicyExperience,
-                    GroupPolicyExperience, ActionGroup)
+                    GroupPolicyExperience, ActionGroup, LinearPenaltyAction)
 from .environment import CandidateBuilder, graph_metrics, promote_candidate_to_state
 from .downstream import TaskMetrics, EvaluationError
 from .reward import RewardRecord, AcceptanceResult
@@ -53,6 +53,9 @@ class TrainingRunner:
 
     @staticmethod
     def _experience(state_id, candidate, action, reward, features):
+        if isinstance(action, LinearPenaltyAction):
+            return GroupPolicyExperience(state_id, candidate.candidate_id, action.log_prob,
+                reward.reward, reward.valid, len(action.delta))
         if isinstance(action, ActionGroup):
             return GroupPolicyExperience(state_id, candidate.candidate_id, action.log_prob,
                                          reward.reward, reward.valid, len(action.actions))
@@ -255,6 +258,12 @@ class GraphPhaseRunner:
                         state, action, progress_callback=solver_progress
                     )
                     candidates.append(candidate)
+                    if progress_callback is not None:
+                        progress_callback({"stage": "candidate_solve_done",
+                            "phase": phase + 1, "update": update_index + 1,
+                            "candidate": candidate_index, "candidate_id": action.candidate_id,
+                            "valid": candidate.valid, "error": candidate.error,
+                            "graph_metrics": dict(candidate.graph_metrics)})
                 evaluations, rewards, experiences = [], [], []
                 features = {f.edge: f.vector() for f in inp.candidate_edges}
                 feature_objects = {f.edge: f for f in inp.candidate_edges}
@@ -302,6 +311,15 @@ class GraphPhaseRunner:
                 selected_edge_features = []
                 for action in actions:
                     rows = []
+                    if isinstance(action, LinearPenaltyAction):
+                        selected_edge_features.append({"candidate_id": action.candidate_id,
+                            "coefficients": action.coefficients,
+                            "scope": "all upper-triangle concept pairs",
+                            "num_pairs": len(action.delta),
+                            "delta_min": float(action.delta.min()),
+                            "delta_max": float(action.delta.max()),
+                            "delta_rms": float(np.sqrt(np.mean(action.delta ** 2)))})
+                        continue
                     action_rows = action.actions if isinstance(action, ActionGroup) else (action,)
                     for record in action_rows:
                         feat = feature_objects.get(record.edge)
