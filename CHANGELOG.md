@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.6.3 graph-only continuation — 2026-10-09
+
+- Fit from verified complete H caches with an explicit increased inner iteration
+  budget; preserve the original config checksum, lambda and all convergence tolerances.
+- Record effective numerical settings, streamed progress and final/failed run status
+  separately from the original experiment. Refit B=I and alternate fixed-lambda MNGM
+  without GPU encoding, task training, LoRA or GRPO.
+
+## v0.6.3 initial-solver diagnostics — 2026-10-08
+
+- Add opt-in objective/SPD/KKT and stopping-threshold observations to weighted
+  Glasso without changing ADMM updates or acceptance checks.
+- Replay B=I initial graph from verified complete H caches with an explicit
+  larger iteration budget, preserving lambda0.8 and all numerical tolerances.
+- Save sampled loss traces and publish diagnostic graphs only after actual
+  convergence; this check does not launch alternating MNGM or task training.
+
+## v0.6.3 download recovery — 2026-10-08
+
+- Resume short original-text archives after EOF/timeouts; continue valid HTTP
+  206 segments without treating each successful segment as a failed attempt.
+- Validate full range boundaries and totals before appending. Preserve corrupt
+  partial files under unique names and retry; publish only checksum-valid ZIPs.
+- Log received/expected bytes and checksums, and document restarting into a new
+  experiment directory while retaining completed downloads and failure logs.
+
+## v0.6.3 — 2026-10-04
+
+- Add a graph-only H04L entry point for the same 2048 training patents, joining
+  same-snapshot granted summary, claims and description by patent ID/year.
+- Bound the complete candidate text to 4096 Qwen tokens with section-balanced
+  original excerpts. Keep 128-token chunks, top-6 and the 1024-token joint input.
+- Collect full-scale evidence diversity, native/projected prototype and empty-
+  evidence cosines, CUDA peaks, covariance diagnostics and paired initial graphs.
+- Fit B=I initialization and one fixed-lambda alternating MNGM graph. No task
+  model, LoRA, GRPO, retrieval evaluation or server pilot is launched.
+- Record Git revision and code/input hashes; document branch-based server setup.
+
 ## v0.6.2 — 2026-10-03
 
 - Add an explicit full H04L joint-evidence entry point: up to six independently

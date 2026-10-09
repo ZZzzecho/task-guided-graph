@@ -64,6 +64,30 @@ def test_failed_solve_publishes_no_precision():
     assert not r.converged and r.Theta is None
 
 
+def test_optional_loss_diagnostics_preserve_exact_solver_and_report_final_certificate():
+    s = np.array([[1., .5, .25], [.5, 1.4, .6], [.25, .6, 1.2]])
+    plain = WeightedGraphicalLasso().solve(s, .4)
+    rows = []
+    observed = WeightedGraphicalLasso().solve(s, .4, diagnostic_callback=rows.append,diagnostic_every=13)
+    assert observed.converged and observed.info() == plain.info()
+    np.testing.assert_array_equal(observed.Theta, plain.Theta)
+    assert rows[0]['iteration'] == 0 and rows[-1]['iteration'] == observed.iterations
+    np.testing.assert_allclose(rows[0]['objective_z'],objective(s,penalty_matrix(3,.4),np.diag(1/np.diag(s))))
+    np.testing.assert_allclose(rows[-1]['objective_z'],observed.objective)
+    assert rows[-1]['primal'] <= rows[-1]['eps_primal']
+    assert rows[-1]['dual'] <= rows[-1]['eps_dual']
+    assert rows[-1]['kkt_z'] <= rows[-1]['kkt_tol'] and rows[-1]['sparse_spd']
+
+
+def test_failed_solver_diagnostics_do_not_publish_an_unconverged_graph():
+    rows = []
+    result = WeightedGraphicalLasso(SolverConfig(max_iter=1)).solve(
+        [[1., .7], [.7, 1.]], .3,diagnostic_callback=rows.append)
+    assert not result.converged and result.Theta is None
+    assert [x['iteration'] for x in rows] == [0,1]
+    assert all(np.isfinite(x['objective_x']) for x in rows)
+
+
 @pytest.mark.parametrize("s,penalty", [([[1., 2.], [2., 1.]], .2),
     ([[1., .2], [.3, 1.]], .2), ([[1., 0.], [0., 1.]], -.1),
     ([[1., 0.], [0., 1.]], [[0., .1], [.3, 0.]]),
