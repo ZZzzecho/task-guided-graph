@@ -39,6 +39,16 @@ class FrozenCandidateSnapshot:
         self.model = causal_lm
         self._parameters = dict(causal_lm.named_parameters())
         self._buffers = dict(causal_lm.named_buffers())
+        meta_names = [name for name, tensor in
+                      (*self._parameters.items(), *self._buffers.items())
+                      if tensor.device.type == "meta"]
+        if meta_names:
+            raise ValueError(
+                "Fixed candidate snapshot requires materialized weights/buffers; "
+                "CPU/disk offload with meta tensors is unsupported. "
+                "On a GPU with sufficient memory, load using --device-map cuda:0. "
+                f"First meta tensors: {meta_names[:5]}"
+            )
         self._mutable = {
             name: p.detach().cpu().clone()
             for name, p in self._parameters.items() if p.requires_grad

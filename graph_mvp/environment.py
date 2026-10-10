@@ -5,7 +5,7 @@ import numpy as np
 
 from .config import EnvironmentConfig, CandidateConfig
 from .types import (GraphSnapshot, GraphState, GraphCandidate, ActionRecord,
-                    ActionGroup, EdgeFeatures, PolicyInput)
+                    ActionGroup, LinearPenaltyAction, EdgeFeatures, PolicyInput)
 from .weighted_glasso import WeightedGraphicalLasso, penalty_matrix, statistical_loss, objective
 
 
@@ -128,11 +128,25 @@ class GraphEnvironment:
             return (action,)
         raise TypeError("action must be ActionRecord or ActionGroup")
 
-    def _edited_lambda(self, state: GraphState, action: ActionRecord | ActionGroup):
+    def _edited_lambda(self, state: GraphState, action: ActionRecord | ActionGroup | LinearPenaltyAction):
         if action.state_id != state.state_id:
             raise ValueError("Action references a stale or different state")
         lam = state.snapshot.Lambda.copy()
         p = len(lam)
+        if isinstance(action, LinearPenaltyAction):
+            if action.num_concepts != p:
+                raise ValueError("Linear action concept axis mismatch")
+            upper = np.triu_indices(p, 1)
+            old = lam[upper]
+            values = np.clip(np.exp(np.clip(
+                np.log(old) + self.config.eta * action.delta,
+                np.log(self.config.lambda_min), np.log(self.config.lambda_max))),
+                self.config.lambda_min, self.config.lambda_max)
+            # Preserve exact keep values, including the all-zero coefficient action.
+            values[action.delta == 0] = old[action.delta == 0]
+            lam[upper] = values
+            lam[(upper[1], upper[0])] = values
+            return lam
         for record in self._records(action):
             i, j = record.edge
             if j >= p:
@@ -144,7 +158,7 @@ class GraphEnvironment:
                 lam[i, j] = lam[j, i] = np.clip(value, self.config.lambda_min, self.config.lambda_max)
         return lam
 
-    def step(self, state: GraphState, action: ActionRecord | ActionGroup, progress_callback=None):
+    def step(self, state: GraphState, action: ActionRecord | ActionGroup | LinearPenaltyAction, progress_callback=None):
         parent = state.snapshot
         if parent.adjacency_threshold != self.config.adjacency_threshold:
             raise ValueError("Adjacency threshold cannot change during a search")
@@ -191,7 +205,13 @@ class GraphEnvironment:
         metrics["delta_edges"] = metrics["num_edges"] - current["num_edges"]
         metrics["density_delta"] = metrics["density"] - current["density"]
         metrics["stat_objective_delta"] = metrics["stat_objective"] - current["stat_objective"]
-        metrics["num_direct_edits"] = len(self._records(action))
+        metrics["num_direct_edits"] = (int(np.count_nonzero(action.delta))
+            if isinstance(action, LinearPenaltyAction) else len(self._records(action)))
+        metrics["num_changed_penalties"] = int(np.count_nonzero(np.triu(lam != parent.Lambda, 1)))
+        upper = np.triu_indices(len(lam), 1)
+        dl = np.log(lam[upper]) - np.log(parent.Lambda[upper])
+        metrics["log_lambda_change_rms"] = float(np.sqrt(np.mean(dl ** 2)))
+        metrics["rho_change_frobenius"] = float(np.linalg.norm(snapshot.Rho - parent.Rho))
         metrics["lambda_l1_change"] = float(np.sum(np.triu(np.abs(lam - parent.Lambda), 1)))
         valid = metrics["density"] <= self.config.max_density
         return GraphCandidate(action.candidate_id, state.state_id, snapshot, action, info, metrics,

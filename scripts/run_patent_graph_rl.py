@@ -10,16 +10,21 @@ import json
 import platform
 from pathlib import Path
 import subprocess
+import sys
 import time
-from dataclasses import fields, is_dataclass
+from datetime import datetime, timezone
+from dataclasses import fields, is_dataclass, replace, asdict
 from collections.abc import Mapping
 import numpy as np
 
 from graph_mvp.config import Config
 from graph_mvp.environment import GraphEnvironment, CandidateBuilder, graph_metrics
 from graph_mvp.estimators import MNGMEstimator, PATIENT_MATRIX_MODE
-from graph_mvp.patient_repr import PatientMatrixDataset, load_concept_vocabulary
+from graph_mvp.patient_repr import PatientMatrixDataset, load_concept_vocabulary, load_concept_prototypes
 from graph_mvp.policy import GRPOPolicy
+from graph_mvp.linear_policy import LinearGRPOPolicy, LinearCandidateBuilder, LINEAR_FEATURES
+from graph_mvp.graph_artifacts import load_fitted_state
+from graph_mvp.types import LinearPenaltyAction
 from graph_mvp.reward import RewardFunction
 from graph_mvp.runner import GraphPhaseRunner
 from graph_mvp.task_model import attach_task_lora, load_local_causal_lm, GLM47_FLASH_MODEL_ID
@@ -151,6 +156,12 @@ def _write_csv(path, rows):
 
 def _progress_printer(info):
     stage = info.get("stage", "progress")
+    if stage == "candidate_solve_done":
+        m = info.get("graph_metrics", {})
+        print(f"[GraphRL:solve] {info['candidate_id']} valid={info['valid']} "
+              f"changed_penalties={m.get('num_changed_penalties')} "
+              f"rho_change={m.get('rho_change_frobenius')} error={info.get('error')}", flush=True)
+        return
     if stage in ("task_warmup", "task_adapt"):
         print(
             f"[{stage}] step {info['step']}/{info['total_steps']} "
@@ -287,7 +298,7 @@ def _covariance_report(state):
                               "final B is the accepted state. No resampling stability claim."}
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description="Patent H04L citation-retrieval Graph-RL")
     p.add_argument("--cache", type=Path, required=True)
     p.add_argument("--concepts", type=Path, required=True)
@@ -301,6 +312,13 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--max-mngm-documents", type=int, default=None)
     p.add_argument("--initial-lambda", type=float, default=None)
+    p.add_argument("--policy", choices=["grpo", "grpo-linear"], default="grpo")
+    p.add_argument("--linear-prototypes", type=Path,
+                   help="Fixed concept prototypes in the cache concept order")
+    p.add_argument("--initial-graph-fit", type=Path,
+                   help="Completed fit directory: verify and reuse fitted graph plus B")
+    p.add_argument("--solver-max-iter", type=int,
+                   help="Explicitly increase solver budget without changing tolerances")
     p.add_argument("--max-train-queries", type=int, default=32)
     p.add_argument("--max-reward-queries", type=int, default=8)
     p.add_argument("--max-val-queries", type=int, default=8)
@@ -328,7 +346,7 @@ def main():
     p.add_argument("--phases", type=int, default=None)
     p.add_argument("--policy-updates-per-phase", type=int, default=3)
     p.add_argument("--num-candidates", type=int, default=None)
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     if args.output.exists() and any(args.output.iterdir()):
         raise SystemExit(f"Output directory already exists and is nonempty: {args.output}")
@@ -336,8 +354,28 @@ def main():
     for sub in ("mngm", "retrieval", "rl", "checkpoints", "graph_analysis"):
         (args.output / sub).mkdir(parents=True, exist_ok=True)
 
+    def progress(info):
+        def clean(value):
+            if isinstance(value, Mapping):
+                return {k: clean(v) for k, v in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [clean(v) for v in value]
+            if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+                return None
+            return value
+        _append_jsonl(args.output / "progress.jsonl", clean(info))
+        _progress_printer(info)
+
     run_start = time.perf_counter()
     cfg = Config.load(args.config)
+    if args.solver_max_iter is not None:
+        if args.solver_max_iter < cfg.solver.max_iter:
+            p.error("--solver-max-iter must not lower the original budget")
+        cfg = replace(cfg, solver=replace(cfg.solver, max_iter=args.solver_max_iter))
+    if args.adapt_steps < 0:
+        p.error("--adapt-steps must be nonnegative")
+    if args.policy == "grpo-linear" and args.linear_prototypes is None:
+        p.error("--linear-prototypes is required for grpo-linear")
     vocab = load_concept_vocabulary(args.concepts)
     cache = PatientMatrixDataset(args.cache)
     if cache.metadata.get("representation_reduction") == "qwen3_mrl_prefix_l2":
@@ -373,6 +411,10 @@ def main():
             "test": None if args.test_pools is None else _file_sha256(args.test_pools),
         },
         "args": vars(args),
+        "status": "running",
+        "effective_solver": asdict(cfg.solver),
+        "policy": args.policy,
+        "linear_feature_names": LINEAR_FEATURES if args.policy == "grpo-linear" else None,
     }
     _write_json(args.output / "run_manifest.json", manifest)
 
@@ -380,13 +422,18 @@ def main():
     estimator = MNGMEstimator(matrices, PATIENT_MATRIX_MODE, cfg.mngm, cfg.solver)
     env = GraphEnvironment(config=cfg.environment, estimator=estimator)
     lam0 = cfg.runner.initial_lambda if args.initial_lambda is None else float(args.initial_lambda)
-    print(f"Initializing graph with B0=I and one weighted GLASSO from shape={list(matrices.shape)} lambda={lam0}", flush=True)
-    state0 = env.initialize_from_estimator(
-        lam0,
-        cache.concept_ids,
-        state_id="patent-state-0",
-        progress_callback=_progress_printer,
-    )
+    if args.initial_graph_fit is not None:
+        print("Verifying completed fitted graph, cache hashes, B and KKT", flush=True)
+        state0, reuse_info = load_fitted_state(args.initial_graph_fit, args.cache,
+            estimator, cache.concept_ids, cfg, args.config)
+        env._check_bounds(state0.snapshot.Lambda)
+        manifest["initial_graph_reuse"] = reuse_info
+        _write_json(args.output / "run_manifest.json", manifest)
+    else:
+        print(f"Initializing graph with B0=I and one weighted GLASSO from shape={list(matrices.shape)} lambda={lam0}", flush=True)
+        state0 = env.initialize_from_estimator(
+            lam0, cache.concept_ids, state_id="patent-state-0",
+            progress_callback=progress)
     print(f"Initial graph: {graph_metrics(state0.snapshot)}", flush=True)
     _save_graph(args.output / "initial_graph.npz", state0)
     _safe_analysis_log("initial effective covariance", lambda: _write_json(
@@ -475,7 +522,7 @@ def main():
             model, evaluator, state0.snapshot, train_ctx, optimizer,
             steps=args.warmup_steps,
             max_grad_norm=cfg.grpo.max_grad_norm,
-            progress_callback=_progress_printer,
+            progress_callback=progress,
             progress_label="task_warmup",
             training_stream=training_stream,
         )
@@ -490,9 +537,17 @@ def main():
     _write_json(args.output / "retrieval" / "initial_val_queries.json",
                 evaluator.score_details(state0.snapshot, val_ctx, top_k=10))
 
-    policy = GRPOPolicy(cfg.grpo, seed=cfg.runner.seed)
+    policy_class = LinearGRPOPolicy if args.policy == "grpo-linear" else GRPOPolicy
+    policy = policy_class(cfg.grpo, seed=cfg.runner.seed)
     reward_fn = RewardFunction(cfg.reward)
     builder = CandidateBuilder(cfg.candidate)
+    if args.policy == "grpo-linear":
+        prototypes, proto_meta = load_concept_prototypes(args.linear_prototypes)
+        if tuple(proto_meta["concept_ids"]) != tuple(cache.concept_ids):
+            raise ValueError("Linear prototype concept IDs/order differs")
+        builder = LinearCandidateBuilder(prototypes, cfg.candidate)
+        manifest["linear_prototypes_sha256"] = _file_sha256(args.linear_prototypes)
+        _write_json(args.output / "run_manifest.json", manifest)
     feature_provider = RetrievalTaskRelevanceProvider(evaluator)
 
     def task_adapter(accepted_state):
@@ -500,7 +555,7 @@ def main():
             model, evaluator, accepted_state.snapshot, train_ctx, optimizer,
             steps=args.adapt_steps,
             max_grad_norm=cfg.grpo.max_grad_norm,
-            progress_callback=_progress_printer,
+            progress_callback=progress,
             progress_label="task_adapt",
             training_stream=training_stream,
         )
@@ -510,7 +565,7 @@ def main():
         candidate_builder=builder,
         validation_evaluator=evaluator,
         min_validation_improvement=cfg.acceptance.min_task_improvement,
-        task_adapter=task_adapter,
+        task_adapter=task_adapter if args.adapt_steps > 0 else None,
         feature_provider=feature_provider,
     )
 
@@ -580,13 +635,21 @@ def main():
         for update in record.updates:
             candidate_rows = []
             feature_by_candidate = {
-                x["candidate_id"]: x["edges"] for x in update.selected_edge_features
+                x["candidate_id"]: x.get("edges", x) for x in update.selected_edge_features
             }
             for candidate, evaluation, reward in zip(
                 update.candidates, update.evaluations, update.rewards
             ):
                 action_rows = []
-                actions = candidate.action.actions if hasattr(candidate.action, "actions") else (candidate.action,)
+                if isinstance(candidate.action, LinearPenaltyAction):
+                    action_rows.append({"type": "linear_coefficients",
+                        "feature_names": LINEAR_FEATURES,
+                        "coefficients": candidate.action.coefficients,
+                        "joint_log_prob": candidate.action.log_prob,
+                        "num_pairs": len(candidate.action.delta)})
+                    actions = ()
+                else:
+                    actions = candidate.action.actions if hasattr(candidate.action, "actions") else (candidate.action,)
                 for action in actions:
                     i, j = action.edge
                     row = {
@@ -646,7 +709,7 @@ def main():
         policy_updates_per_phase=args.policy_updates_per_phase,
         num_candidates=cfg.runner.num_candidates if args.num_candidates is None else args.num_candidates,
         on_phase=report,
-        progress_callback=_progress_printer,
+        progress_callback=progress,
     )
 
     _save_graph(args.output / "final_graph.npz", result.final_state)
@@ -701,6 +764,7 @@ def main():
 
     summary = {
         "cache": str(args.cache),
+        "policy": policy.version,
         "cache_fingerprint": cache.fingerprint(),
         "mngm_shape": list(matrices.shape),
         "initial_lambda": lam0,
@@ -734,8 +798,35 @@ def main():
     (args.output / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    manifest.update(status="complete", runtime_seconds=summary["runtime_seconds"])
+    _write_json(args.output / "run_manifest.json", manifest)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
+def entrypoint(argv=None):
+    """Preserve the original exception and mark an initialized run as failed."""
+    argv = sys.argv[1:] if argv is None else argv
+    try:
+        main(argv)
+    except Exception as exc:
+        parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+        parser.add_argument("--output", type=Path)
+        args, _ = parser.parse_known_args(argv)
+        def record_failure():
+            if args.output is None:
+                return
+            path = args.output / "run_manifest.json"
+            if not path.is_file():
+                return
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            if manifest.get("status") != "running":
+                return
+            manifest.update(status="failed", error=f"{type(exc).__name__}: {exc}",
+                            failed_at_utc=datetime.now(timezone.utc).isoformat())
+            _write_json(path, manifest)
+        _safe_analysis_log("record failed run", record_failure)
+        raise
+
+
 if __name__ == "__main__":
-    main()
+    entrypoint()
