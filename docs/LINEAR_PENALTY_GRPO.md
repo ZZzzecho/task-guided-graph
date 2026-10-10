@@ -51,6 +51,14 @@ multi-seed comparison proving linear GRPO outperforms the old policy.
 
 Run in the existing server graph_rl environment:
 
+The H20 trial explicitly loads the BF16 task model on `cuda:0`; its checkpoint
+is about 62.4 GB and the server has about 140 GiB of GPU memory. The fixed encoder
+snapshot requires all model weights/buffers to be materialized. Automatic CPU/disk
+offload can leave meta tensors and is not supported by this snapshot implementation.
+Startup failures now mark an initialized run manifest as failed and preserve
+the original exception. The initial 2026-10-09 trial failed during snapshot creation
+before warmup or any GRPO candidate; retain that output and restart in a new directory.
+
 ```bash
 source /laijizheng/miniconda3/etc/profile.d/conda.sh
 conda activate graph_rl

@@ -13,7 +13,7 @@ exec "$PYTHON" -u -m scripts.run_patent_graph_rl \
   --train-pools data/patents_h04l/retrieval_train_candidates.jsonl \
   --graph-pools data/patents_h04l/retrieval_graph_candidates.jsonl \
   --val-pools data/patents_h04l/retrieval_val_candidates.jsonl \
-  --task-model /laijizheng/models/GLM-4.7-Flash --task-local-files-only \
+  --task-model /laijizheng/models/GLM-4.7-Flash --task-local-files-only --device-map cuda:0 \
   --max-mngm-documents 2048 --max-train-queries 1024 \
   --max-reward-queries 128 --max-val-queries 256 \
   --task-seed 11 --warmup-steps 50 --adapt-steps 0 \

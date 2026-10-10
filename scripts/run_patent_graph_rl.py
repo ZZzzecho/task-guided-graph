@@ -10,7 +10,9 @@ import json
 import platform
 from pathlib import Path
 import subprocess
+import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import fields, is_dataclass, replace, asdict
 from collections.abc import Mapping
 import numpy as np
@@ -296,7 +298,7 @@ def _covariance_report(state):
                               "final B is the accepted state. No resampling stability claim."}
 
 
-def main():
+def main(argv=None):
     p = argparse.ArgumentParser(description="Patent H04L citation-retrieval Graph-RL")
     p.add_argument("--cache", type=Path, required=True)
     p.add_argument("--concepts", type=Path, required=True)
@@ -344,7 +346,7 @@ def main():
     p.add_argument("--phases", type=int, default=None)
     p.add_argument("--policy-updates-per-phase", type=int, default=3)
     p.add_argument("--num-candidates", type=int, default=None)
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     if args.output.exists() and any(args.output.iterdir()):
         raise SystemExit(f"Output directory already exists and is nonempty: {args.output}")
@@ -801,5 +803,30 @@ def main():
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
+def entrypoint(argv=None):
+    """Preserve the original exception and mark an initialized run as failed."""
+    argv = sys.argv[1:] if argv is None else argv
+    try:
+        main(argv)
+    except Exception as exc:
+        parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+        parser.add_argument("--output", type=Path)
+        args, _ = parser.parse_known_args(argv)
+        def record_failure():
+            if args.output is None:
+                return
+            path = args.output / "run_manifest.json"
+            if not path.is_file():
+                return
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            if manifest.get("status") != "running":
+                return
+            manifest.update(status="failed", error=f"{type(exc).__name__}: {exc}",
+                            failed_at_utc=datetime.now(timezone.utc).isoformat())
+            _write_json(path, manifest)
+        _safe_analysis_log("record failed run", record_failure)
+        raise
+
+
 if __name__ == "__main__":
-    main()
+    entrypoint()
