@@ -21,7 +21,7 @@ def run(args, progress):
     if tuple(c['concept_id'] for c in concepts)!=concept_ids: raise ValueError('concept order mismatch')
     model_manifest=json.loads((source/'run_manifest.json').read_text())
     lm_path=model_manifest['args']['task_model']
-    protocol={'seeds':args.seeds,'arms':['text','concept','graph'],'epochs':args.epochs,
+    protocol={'seeds':args.seeds,'arms':args.arms,'epochs':args.epochs,
         'primary':'macro_average_precision','secondary':['macro_f1','micro_f1','bce'],
         'train':4563,'validation':777,'reward_population':'all training if later graph search',
         'graph':'same pre-existing initial MNGM, fixed for this experiment',
@@ -86,6 +86,7 @@ def run(args, progress):
     for seed in args.seeds:
         scores={a:np.load(args.output/f'seed_{seed}_{a}_validation_scores.npz') for a in protocol['arms']}
         for left,right in [('concept','text'),('graph','concept'),('graph','text')]:
+            if left not in scores or right not in scores:continue
             for metric in ['macro_ap','macro_f1']:
                 comparisons.append({'seed':seed,'left':left,'right':right,'metric':metric,
                     **paired_bootstrap(scores[left]['labels'],scores[left]['probabilities'],
@@ -99,18 +100,19 @@ def main():
     parser.add_argument('--source',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--seeds',type=int,nargs='+',default=[11,17,23])
+    parser.add_argument('--arms',choices=['text','concept','graph'],nargs='+',default=['text','concept','graph'])
     parser.add_argument('--epochs',type=int,default=1)
     parser.add_argument('--fp32-heads',action='store_true')
     parser.add_argument('--readout',choices=['last','mean'],default='last')
     parser.add_argument('--training-rng',choices=['seed','post-init'],default='post-init')
     args=parser.parse_args()
-    if args.epochs<1 or len(set(args.seeds))!=len(args.seeds): parser.error('invalid epochs/seeds')
+    if args.epochs<1 or len(set(args.seeds))!=len(args.seeds) or len(set(args.arms))!=len(args.arms): parser.error('invalid epochs/seeds/arms')
     args.output.mkdir(parents=True,exist_ok=True)
     revision=subprocess.run(['git','rev-parse','HEAD'],capture_output=True,text=True,check=True).stdout.strip()
     inputs={name:hashlib.sha256((args.source/name).read_bytes()).hexdigest() for name in
             ['initial_graph.npz','prepared/train.jsonl','prepared/val.jsonl','prepared/concepts.json']}
     fingerprint=hashlib.sha256(json.dumps({'source':str(args.source.resolve()),'seeds':args.seeds,
-        'epochs':args.epochs,'fp32_heads':args.fp32_heads,'readout':args.readout,
+        'epochs':args.epochs,'arms':args.arms,'fp32_heads':args.fp32_heads,'readout':args.readout,
         'training_rng':args.training_rng,
         'git_sha':revision,'inputs':inputs},sort_keys=True).encode()).hexdigest()
     manifest_path=args.output/'run_manifest.json'
