@@ -195,7 +195,8 @@ class MNGMEstimator:
     - has no mandatory CUDA/numba dependency.
     """
 
-    def __init__(self, samples, mode: str, config=MNGMConfig(), solver_config=SolverConfig()):
+    def __init__(self, samples, mode: str, config=MNGMConfig(), solver_config=SolverConfig(),
+                 *, covariance_device=None):
         if mode not in MATRIX_MODES:
             raise ValueError(f"MNGM mode must be one of {MATRIX_MODES}")
         x = np.asarray(samples, dtype=float)
@@ -220,10 +221,28 @@ class MNGMEstimator:
             self.latent_correlation = readonly(_spearman_sine_correlation(x, config.min_eig))
         else:
             raise ValueError("Unknown MNGM transform")
+        self._covariance_tensor = None
+        if covariance_device is not None:
+            if self.transformed is None:
+                raise ValueError('torch covariance backend requires rank_gaussian transform')
+            import torch
+            # Optional backend only: retain double precision and the same CPU
+            # ridge/SPD projection. The sample tensor is copied once per estimator.
+            self._covariance_tensor = torch.tensor(self.transformed, dtype=torch.float64,
+                                                   device=covariance_device)
+
+    def _tensor_matrix(self, matrix):
+        import torch
+        return torch.tensor(matrix, dtype=torch.float64, device=self._covariance_tensor.device)
 
     def _concept_covariance(self, representation_precision):
         b = symmetric_matrix(representation_precision, "representation_precision", self.r)
-        if self.transformed is not None:
+        if self._covariance_tensor is not None:
+            h = self._covariance_tensor
+            weighted = self._tensor_matrix(b) @ h
+            s = (h.reshape(-1, self.p).T @ weighted.reshape(-1, self.p)).cpu().numpy()
+            s /= self.n_samples * self.r
+        elif self.transformed is not None:
             # (1/(N r)) sum_s H_s^T B H_s
             s = np.einsum("ab,sai,sbj->ij", b, self.transformed, self.transformed,
                           optimize=True) / (self.n_samples * self.r)
@@ -234,7 +253,13 @@ class MNGMEstimator:
 
     def _representation_covariance(self, concept_precision):
         a = symmetric_matrix(concept_precision, "concept_precision", self.p)
-        if self.transformed is not None:
+        if self._covariance_tensor is not None:
+            import torch
+            h = self._covariance_tensor
+            weighted = h @ self._tensor_matrix(a)
+            s = torch.einsum('nai,nbi->ab', weighted, h).cpu().numpy()
+            s /= self.n_samples * self.p
+        elif self.transformed is not None:
             # (1/(N p)) sum_s H_s A H_s^T
             s = np.einsum("ij,sai,sbj->ab", a, self.transformed, self.transformed,
                           optimize=True) / (self.n_samples * self.p)
@@ -331,7 +356,11 @@ class MNGMEstimator:
         sign_b, logdet_b = np.linalg.slogdet(b)
         if sign_a <= 0 or sign_b <= 0:
             raise np.linalg.LinAlgError("MNGM precisions must be SPD")
-        if self.transformed is not None:
+        if self._covariance_tensor is not None:
+            h = self._covariance_tensor
+            trace = float(((self._tensor_matrix(b) @ h) *
+                           (h @ self._tensor_matrix(a))).sum().item()) / self.n_samples
+        elif self.transformed is not None:
             trace = np.einsum("ab,sai,ij,sbj->", b, self.transformed, a,
                               self.transformed, optimize=True) / self.n_samples
         else:

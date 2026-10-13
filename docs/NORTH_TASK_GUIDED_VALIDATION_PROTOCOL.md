@@ -62,3 +62,9 @@ fixed rho 10/100 against the existing +5% penalty benchmark. Preserve all stoppi
 tolerances and compare objective/precision before adoption. The optional setting
 defaults off. See Boyd et al. (2011), section 3.4.1:
 https://web.stanford.edu/~boyd/papers/pdf/admm_distr_stats.pdf.
+
+Full-population contraction benchmark: an optional Torch device backend retains
+float64 transformed samples, uses the same matrix contractions and CPU ridge/SPD
+projection, and leaves NumPy as default. Compare both covariances and unpenalized
+likelihood at the actual 4563 x 64 x 876 shape before adoption. This benchmark
+alone cannot establish a speedup for the entire alternating fit.
