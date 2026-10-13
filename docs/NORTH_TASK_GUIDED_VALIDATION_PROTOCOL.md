@@ -148,3 +148,27 @@ of the correction to the frozen text logits; this checks whether overfitting the
 new residual is reversible. Report the complete regularization panel; do not
 select the validation winner and treat it as confirmed efficacy. Graph search
 and the statistical-evidence scheme remain separate questions.
+
+### Receiver aligned with the statistical variables
+
+The mention-reader panel did not meet the AP/F1 target. Before rejecting the
+research direction, test a receiver that uses the same patient-concept H as the
+MNGM fit. Build 777 validation matrices with the exact saved training projection,
+concept order, frozen encoder, joint-evidence template, top-2/chunk64/max512
+settings; batching is increased to 32 for efficiency. Validation matrices are
+never included in the statistical fit. Assert the saved projection identity and
+mark this cache source_split=validation after completion. No test access.
+
+Gaussianize each H cell using the TRAIN empirical CDF, matching the training
+MNGM rank transform including ties. Use a shared trainable 64-to-8 task projection,
+concept identity vectors, signed absolute-degree-normalized graph message and
+8-label attention pooling. This projection changes only the receiver; the
+statistical basis is fixed. A zero-initialized residual label layer preserves the
+same seed's frozen cached uniform-BCE text head at initialization. All three
+residual arms share architecture, initialization, training order and capacity.
+Compare no-edge concept, initial graph and fixed node permutation; include the
+frozen text reference. Seeds 11/17/23, 5 full-training epochs, batch128, Adam .003,
+logit-correction penalty 1 and .001 mean-squared label-weight penalty. Report every
+arm, no validation selection. These are receiver seeds on one frozen backbone,
+not independent end-to-end training or a GRPO/uncertainty result. GPU is shared
+with other frozen-model experiments, so elapsed times are not isolated benchmarks.
