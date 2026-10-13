@@ -121,3 +121,20 @@ trained with graph, so its readouts do not establish independent text-only
 training performance or graph efficacy. This check isolates readout stability
 and the attainable performance of the cached representations.
 
+
+### Cached mention graph reader pilot, 2026-10-13
+
+Predeclare a cheap architectural diagnostic before task-guided search on this
+reader. Use the same original frozen text features and the corresponding frozen
+uniform-BCE text head for seeds 11/17/23. Binary literal keyword mentions gate
+nodes. Messages are a_i sum_j rho_ji a_j, scaled by per-node standard deviation
+of the initial graph messages on TRAIN only, floored at .1 and fixed across arms.
+Train a residual tanh node reader (learned self/message scales, bias and an
+8-label linear readout initialized to zero), 300 full-training Adam steps at
+.01 with .001 mean-squared readout weight penalty. Compare text, concept/no-edge,
+initial graph and a single fixed node-permuted graph. Same residual capacity and
+initialization in the last three arms; frozen text head throughout. Report every
+arm and seed, no validation selection, test closed. This changes the receiver and
+is exploratory graph mechanism evidence on one frozen backbone, not a GRPO,
+statistical-confidence or end-to-end independent text training claim. Literal
+mentions can include negated findings and are not annotated medical entities.
