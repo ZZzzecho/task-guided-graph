@@ -7,6 +7,19 @@ from graph_mvp.north_validation import (MechanismClassifier,contexts_from_prepar
     capture_trainables,restore_trainables,paired_bootstrap)
 from test_north_multilabel import LM,Tokenizer
 from graph_mvp.weighted_glasso import WeightedGraphicalLasso
+from graph_mvp.north_validation import masked_mean_pool
+
+
+def test_mean_pool_ignores_padding_and_fp32_control_gradients():
+    hidden=torch.tensor([[[100.,100.],[1.,3.],[3.,1.]],[[1.,3.],[3.,1.],[100.,100.]]])
+    mask=torch.tensor([[0,1,1],[1,1,0]])
+    torch.testing.assert_close(masked_mean_pool(hidden,mask),torch.ones((2,2))*2)
+    model=MechanismClassifier(LM(),SoftGraphTokenizer(np.random.default_rng(3).normal(size=(4,12)),12,2,6),fp32_heads=True,readout='mean')
+    for arm in ['text','concept','graph']:
+        model.arm=arm;model.zero_grad()
+        logits=model(torch.tensor([[1,2,3]]),torch.ones((1,3),dtype=torch.long),np.ones((4,4))-np.eye(4))
+        logits.sum().backward()
+        assert model.head.weight.dtype==torch.float32 and model.head.weight.grad.abs().sum()>0
 
 
 def test_paired_restore_and_text_concept_graph_controls():

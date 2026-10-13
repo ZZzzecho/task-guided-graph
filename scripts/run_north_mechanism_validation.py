@@ -28,6 +28,8 @@ def run(args, progress):
         'source_sha':model_manifest['git_sha'],'learning_rate':1e-4,'batch_size':4,
         'max_length':512,'lora':{'r':16,'alpha':32,'dropout':.05},
         'activation':'unchanged legacy, to isolate architecture before altering activation',
+        'fp32_heads':args.fp32_heads,'readout':args.readout,
+        'training_rng':args.training_rng,
         'test_split_touched':False,'threshold':.5,
         'interpretation':'mechanism controls; not task-guided graph learning evidence'}
     write(args.output/'protocol.json',protocol)
@@ -41,8 +43,10 @@ def run(args, progress):
         lm,tok=load_local_causal_lm(lm_path,device_map='cuda:0',dtype='bfloat16',local_files_only=True)
         lm=attach_task_lora(lm,r=16,alpha=32,dropout=.05)
         graph_tok=build_task_soft_graph_tokenizer(lm,tok,[c['concept_text'] for c in concepts],num_tokens=8)
-        model=MechanismClassifier(lm,graph_tok)
+        model=MechanismClassifier(lm,graph_tok,fp32_heads=args.fp32_heads,readout=args.readout)
         initial=capture_trainables(model)
+        post_init_rng=torch.get_rng_state().clone()
+        post_init_cuda_rng=torch.cuda.get_rng_state_all()
         contexts=contexts_from_prepared(source/'prepared',concept_ids,tok)
         if len(contexts['train'].texts)!=4563 or len(contexts['val'].texts)!=777:
             raise ValueError('unexpected full-data populations')
@@ -52,6 +56,9 @@ def run(args, progress):
             if target.exists(): progress({'stage':'arm_cached','seed':seed,'arm':arm}); continue
             restore_trainables(model,initial);model.arm=arm
             random.seed(seed);np.random.seed(seed);torch.manual_seed(seed)
+            if args.training_rng=='post-init':
+                torch.set_rng_state(post_init_rng)
+                torch.cuda.set_rng_state_all(post_init_cuda_rng)
             optimizer=torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],lr=1e-4)
             started=time.monotonic()
             progress({'stage':'arm_train_start','seed':seed,'arm':arm})
@@ -93,6 +100,9 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--seeds',type=int,nargs='+',default=[11,17,23])
     parser.add_argument('--epochs',type=int,default=1)
+    parser.add_argument('--fp32-heads',action='store_true')
+    parser.add_argument('--readout',choices=['last','mean'],default='last')
+    parser.add_argument('--training-rng',choices=['seed','post-init'],default='post-init')
     args=parser.parse_args()
     if args.epochs<1 or len(set(args.seeds))!=len(args.seeds): parser.error('invalid epochs/seeds')
     args.output.mkdir(parents=True,exist_ok=True)
@@ -100,7 +110,9 @@ def main():
     inputs={name:hashlib.sha256((args.source/name).read_bytes()).hexdigest() for name in
             ['initial_graph.npz','prepared/train.jsonl','prepared/val.jsonl','prepared/concepts.json']}
     fingerprint=hashlib.sha256(json.dumps({'source':str(args.source.resolve()),'seeds':args.seeds,
-        'epochs':args.epochs,'git_sha':revision,'inputs':inputs},sort_keys=True).encode()).hexdigest()
+        'epochs':args.epochs,'fp32_heads':args.fp32_heads,'readout':args.readout,
+        'training_rng':args.training_rng,
+        'git_sha':revision,'inputs':inputs},sort_keys=True).encode()).hexdigest()
     manifest_path=args.output/'run_manifest.json'
     if manifest_path.exists() and json.loads(manifest_path.read_text())['fingerprint']!=fingerprint:
         raise ValueError('resume configuration mismatch')

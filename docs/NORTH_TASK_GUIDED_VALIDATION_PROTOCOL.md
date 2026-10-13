@@ -34,3 +34,16 @@ over the strongest matched comparator, with no material macro-F1 loss (> .002),
 paired directional support and seed consistency. These are research decision targets,
 not clinical standards. Current validation has already been used for exploration.
 Patient IDs are unavailable, so record independence remains a limitation.
+
+Pilot amendment, 2026-10-13: the first seed yielded macro-AP .174/.206/.190
+for text/concept/graph, far below the earlier .865 fixed-graph checkpoint.
+Stop expansion of that pilot and diagnose reproduction before drawing topology
+conclusions. Its dropout RNG was reset to the seed after initialization; record and
+restore the post-initialization RNG for subsequent paired arms to match the original
+training path. Separately expose FP32 trainable heads and mean pooling as recorded
+experimental options; neither is yet established as the cause or remedy.
+Frozen-representation probes fit FP32 linear heads on all training records, compare
+last/mean pooling and uniform/sqrt-positive weighting, and leave test unopened.
+These probes diagnose representations and optimization; they are not graph-policy
+evidence. Conditional penalty grids hold the representation precision B fixed and
+must be identified as conditional Glasso rather than a full alternating MNGM refit.
