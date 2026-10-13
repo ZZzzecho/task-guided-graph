@@ -47,3 +47,11 @@ last/mean pooling and uniform/sqrt-positive weighting, and leave test unopened.
 These probes diagnose representations and optimization; they are not graph-policy
 evidence. Conditional penalty grids hold the representation precision B fixed and
 must be identified as conditional Glasso rather than a full alternating MNGM refit.
+
+Conditional-grid evaluation uses the original frozen task checkpoint. Select the
+fitted graph with highest macro-AP on all 4563 training records, subject to fixed-B
+unpenalized NLL increase per concept <= .01 and edge count <= twice the initial
+count at |partial correlation| > 1e-5. Record these exploratory gates before scores
+are computed. Validation evaluates that training-selected candidate; zero and
+permuted graphs are sensitivity controls and cannot enter selection. No GRPO
+advantage or full alternating-MNGM claim follows from this conditional experiment.
