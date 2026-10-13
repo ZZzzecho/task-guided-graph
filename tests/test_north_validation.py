@@ -7,6 +7,7 @@ from graph_mvp.north_validation import (MechanismClassifier,contexts_from_prepar
     capture_trainables,restore_trainables,paired_bootstrap)
 from test_north_multilabel import LM,Tokenizer
 from graph_mvp.weighted_glasso import WeightedGraphicalLasso
+from graph_mvp.config import SolverConfig
 from graph_mvp.north_validation import masked_mean_pool
 
 
@@ -70,3 +71,15 @@ def test_dual_reconstruction_matches_cold_and_legacy_warm_for_changed_problem():
     assert all(r.converged for r in [cold,legacy,warm])
     np.testing.assert_allclose(warm.Theta,cold.Theta,atol=5e-5)
     assert warm.kkt_residual<=solver.config.kkt_tol
+
+
+def test_adaptive_rho_rescales_dual_and_matches_certified_solution():
+    s=np.array([[1.,.5,.25],[.5,1.4,.6],[.25,.6,1.2]])
+    reference=WeightedGraphicalLasso().solve(s,.4)
+    history=[]
+    solver=WeightedGraphicalLasso(SolverConfig(max_iter=5000,rho=1e-4))
+    result=solver.solve(s,.4,adaptive_rho=True,progress_callback=history.append)
+    assert reference.converged and result.converged
+    assert len({row['rho'] for row in history})>1
+    assert result.kkt_residual<=solver.config.kkt_tol
+    np.testing.assert_allclose(result.Theta,reference.Theta,atol=5e-5)

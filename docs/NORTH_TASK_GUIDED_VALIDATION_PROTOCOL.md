@@ -55,3 +55,10 @@ count at |partial correlation| > 1e-5. Record these exploratory gates before sco
 are computed. Validation evaluates that training-selected candidate; zero and
 permuted graphs are sensitivity controls and cannot enter selection. No GRPO
 advantage or full alternating-MNGM claim follows from this conditional experiment.
+
+Solver-only follow-up: compare adaptive residual balancing (ratio 10, factor 2,
+every 25 steps through iteration 1000, scaled-dual rescaling, then fixed rho) and
+fixed rho 10/100 against the existing +5% penalty benchmark. Preserve all stopping
+tolerances and compare objective/precision before adoption. The optional setting
+defaults off. See Boyd et al. (2011), section 3.4.1:
+https://web.stanford.edu/~boyd/papers/pdf/admm_distr_stats.pdf.
