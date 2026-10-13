@@ -172,3 +172,17 @@ logit-correction penalty 1 and .001 mean-squared label-weight penalty. Report ev
 arm, no validation selection. These are receiver seeds on one frozen backbone,
 not independent end-to-end training or a GRPO/uncertainty result. GPU is shared
 with other frozen-model experiments, so elapsed times are not isolated benchmarks.
+
+### Frozen graph intervention audit
+
+User explicitly asks to verify actual graph usefulness, including why learned
+and random graphs appear equally ineffective. Audit all three completed mention
+reader regularization settings [.1,1,10] without retraining. For each setting and
+reader seed11/17/23, freeze both the true-graph-trained and permutation-1001-trained
+teachers; intervene with true graph, zero graph and permutations1001..1005.
+Assert native predictions reproduce saved private scores before comparing.
+Report every intervention. Any drop after a swap establishes graph dependence,
+not superior graph quality by itself; random-trained teachers control for generic
+mismatch between the trained representation and a new graph. Matched retraining
+controls, seed variation and untouched-test confirmation remain necessary for
+positive efficacy claims. No validation selection or test access.
