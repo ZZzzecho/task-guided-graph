@@ -138,3 +138,13 @@ arm and seed, no validation selection, test closed. This changes the receiver an
 is exploratory graph mechanism evidence on one frozen backbone, not a GRPO,
 statistical-confidence or end-to-end independent text training claim. Literal
 mentions can include negated findings and are not annotated medical entities.
+
+The unregularized cached-reader pilot improved training AP to approximately .98
+but reduced validation AP from .901 to .839 (concept) or .845 (graph). The graph
+advantage over concept/permuted does not clear the stronger text reference.
+Follow up with predeclared residual-logit penalties [.1,1,10], leaving all other
+settings, all seeds and all training records unchanged. Penalize the mean square
+of the correction to the frozen text logits; this checks whether overfitting the
+new residual is reversible. Report the complete regularization panel; do not
+select the validation winner and treat it as confirmed efficacy. Graph search
+and the statistical-evidence scheme remain separate questions.

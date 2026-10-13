@@ -32,7 +32,10 @@ def main():
     p.add_argument('--features',type=Path,required=True)
     p.add_argument('--heads',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--residual-penalty',type=float,default=0.)
+    p.add_argument('--steps',type=int,default=300)
     args=p.parse_args();args.output.mkdir(parents=True,exist_ok=False)
+    if args.residual_penalty<0 or args.steps<1:raise ValueError('invalid residual training settings')
     torch.set_num_threads(8)
     graph=np.load(args.source/'initial_graph.npz',allow_pickle=False)
     concepts=json.loads((args.source/'prepared/concepts.json').read_text())
@@ -57,7 +60,8 @@ def main():
             'concept_gate':'literal substring binary mention, no label-derived gating',
             'message':'a_i sum_j rho_ji a_j / fixed initial-training per-node std (minimum .1)',
             'residual':'per-node tanh with learned self/message scales and bias; zero-initialized 8-label readout',
-            'train':4563,'val':777,'steps':300,'optimizer':'Adam .01, .001 mean-squared readout penalty',
+            'train':4563,'val':777,'steps':args.steps,'optimizer':'Adam .01, .001 mean-squared readout penalty',
+            'residual_logit_penalty':args.residual_penalty,
             'selection':'none; all seeds and arms reported','test_split_touched':False,
             'limitations':'exploratory new graph reader on one frozen backbone; not full-pipeline text baseline, not GRPO or statistical confidence'},
         'runs':[]}
@@ -72,9 +76,10 @@ def main():
                 if arm in ('graph','permuted') else torch.zeros_like(a)) for s,a in mentions.items()}
             if arm!='text':
                 optimizer=torch.optim.Adam(reader.parameters(),lr=.01)
-                for step in range(300):
-                    logits=base['train']+reader(mentions['train'],messages['train'])
-                    loss=F.binary_cross_entropy_with_logits(logits,y)+.001*reader.readout.weight.square().mean()
+                for step in range(args.steps):
+                    residual=reader(mentions['train'],messages['train'])
+                    logits=base['train']+residual
+                    loss=F.binary_cross_entropy_with_logits(logits,y)+.001*reader.readout.weight.square().mean()+args.residual_penalty*residual.square().mean()
                     if not torch.isfinite(loss):raise RuntimeError('nonfinite residual loss')
                     optimizer.zero_grad();loss.backward();optimizer.step()
             row={'seed':seed,'arm':arm,'seconds':time.monotonic()-start}
