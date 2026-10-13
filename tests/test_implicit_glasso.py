@@ -3,6 +3,7 @@ import torch
 from graph_mvp.config import SolverConfig
 from graph_mvp.weighted_glasso import WeightedGraphicalLasso,penalty_matrix
 from graph_mvp.implicit_glasso import implicit_penalty_gradient
+from graph_mvp.implicit_glasso import macro_pairwise_logit_gradient
 
 
 def test_implicit_edge_gradient_matches_certified_finite_difference():
@@ -25,3 +26,18 @@ def test_implicit_edge_gradient_matches_certified_finite_difference():
 def test_zero_task_gradient_cannot_create_an_update():
     result=implicit_penalty_gradient(np.eye(3),np.zeros((3,3)))
     assert result.converged and result.iterations==0 and not result.gradient.any()
+
+
+def test_full_population_ranking_gradient_matches_autograd_and_ignores_common_shift():
+    z=torch.tensor([[1.,-2.],[-1.,1.],[.3,.4],[-.2,-.7]],dtype=torch.float64,requires_grad=True)
+    y=torch.tensor([[1.,0.],[0.,1.],[1.,0.],[0.,1.]],dtype=torch.float64)
+    expected=torch.zeros((),dtype=z.dtype)
+    for j in range(2):
+        pos=z[y[:,j]==1,j];neg=z[y[:,j]==0,j]
+        expected+=torch.nn.functional.softplus((neg[None,:]-pos[:,None])/.7).mean()/2
+    expected+=.1*torch.nn.functional.binary_cross_entropy_with_logits(z,y);expected.backward()
+    loss,gradient=macro_pairwise_logit_gradient(z,y,temperature=.7,bce_weight=.1)
+    assert abs(loss-float(expected.detach()))<1e-12
+    torch.testing.assert_close(gradient,z.grad,rtol=1e-12,atol=1e-12)
+    _,ranking_only=macro_pairwise_logit_gradient(z,y,bce_weight=0)
+    torch.testing.assert_close(ranking_only.sum(0),torch.zeros(2,dtype=z.dtype),atol=1e-12,rtol=0)

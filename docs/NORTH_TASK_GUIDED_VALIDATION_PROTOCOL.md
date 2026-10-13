@@ -87,3 +87,22 @@ General background on differentiating through convex programs: Agrawal et al.
 (2019), https://papers.neurips.cc/paper_files/paper/2019/hash/9ce3c52fc54362e22053399d3181c638-Abstract.html.
 The active-set Glasso adjoint here is a project-specific derivation, checked by
 finite differences; it is not a reproduction of that paper's software.
+
+Directed optimizer experiment: freeze each stabilized graph checkpoint. Compute
+the macro pairwise logistic-ranking surrogate gradient on all 4563 records
+(temperature 1, plus .1 uniform BCE); its surrogate is not AP. Map the precision
+gradient through the certified active-set adjoint (CG residual <=1e-6, max1000).
+Eligible penalty coordinates have initial |partial correlation| >=.001; empirical
+fit support is not confidence. Scale log-penalty descent by the 95th percentile,
+clip directions to [-1,1], and try steps [.1,.3,.7] with penalties clipped [.05,3].
+Compare three matched random candidates from one seed+1001 permutation of exactly
+the same eligible edge values, and three uniform candidates [.2,.4,1.2]. Each family
+includes the unchanged baseline. A fresh strict Glasso solve uses rho10; one
+adaptive-rho1 retry is allowed for numerical failure, with unchanged tolerances.
+Conditional NLL increase per concept <=.01 and edges <=2xinitial remain the gates;
+full-training macro-AP alone selects each family's candidate. Refit each selected
+penalty with full alternating patient-MNGM, rho10 and the verified float64 GPU
+contractions, then recheck full NLL/complexity and training AP; reject to the initial
+graph when these fail. No validation selection or test access. Compare final
+methods with the strongest matched text/concept/fixed-graph controls. This is a
+bounded gradient-versus-search test, not a GRPO advantage or global optimum claim.

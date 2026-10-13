@@ -56,3 +56,30 @@ def implicit_penalty_gradient(theta, task_gradient, *, device='cpu',
     relative=float(torch.linalg.vector_norm(g-hessian(x))/norm)
     gradient=-x*torch.sign(theta);gradient=(gradient+gradient.T)*.5;gradient.fill_diagonal_(0)
     return ImplicitPenaltyGradient(gradient,relative<=tolerance,iteration,relative)
+
+
+def macro_pairwise_logit_gradient(logits, labels, *, temperature=1., bce_weight=.1):
+    """Full-population macro logistic-ranking surrogate plus a small BCE term.
+
+    Return the loss and its logit gradient without retaining a task-model graph.
+    A ranking surrogate is not average precision; AP selects evaluated candidates.
+    """
+    z=torch.as_tensor(logits,dtype=torch.float64).detach()
+    y=torch.as_tensor(labels,dtype=torch.float64,device=z.device).detach()
+    if z.ndim!=2 or z.shape!=y.shape or not len(z) or temperature<=0 or bce_weight<0:
+        raise ValueError('invalid ranking inputs')
+    if not torch.isfinite(z).all() or not torch.all((y==0)|(y==1)):raise ValueError('invalid ranking values')
+    gradient=torch.zeros_like(z);loss=torch.zeros((),dtype=z.dtype,device=z.device)
+    for j in range(z.shape[1]):
+        positive=torch.where(y[:,j]==1)[0];negative=torch.where(y[:,j]==0)[0]
+        if not len(positive) or not len(negative):continue
+        gaps=(z[negative,j][None,:]-z[positive,j][:,None])/temperature
+        denominator=len(positive)*len(negative)*z.shape[1]
+        probabilities=torch.sigmoid(gaps)
+        loss=loss+torch.nn.functional.softplus(gaps).sum()/denominator
+        gradient[positive,j]=-probabilities.sum(1)/(denominator*temperature)
+        gradient[negative,j]=probabilities.sum(0)/(denominator*temperature)
+    if bce_weight:
+        loss=loss+bce_weight*torch.nn.functional.binary_cross_entropy_with_logits(z,y)
+        gradient=gradient+bce_weight*(torch.sigmoid(z)-y)/z.numel()
+    return float(loss),gradient
