@@ -68,3 +68,22 @@ float64 transformed samples, uses the same matrix contractions and CPU ridge/SPD
 projection, and leaves NumPy as default. Compare both covariances and unpenalized
 likelihood at the actual 4563 x 64 x 876 shape before adoption. This benchmark
 alone cannot establish a speedup for the entire alternating fit.
+
+Stabilized paired controls: seeds 11/17/23, all three arms, two full epochs,
+FP32 classifier and graph modules, mean pooling, post-initialization paired RNG,
+otherwise the same LoRA, lr=1e-4, batch=4, full train and validation populations.
+Run seed 11 first; if any arm macro-AP is below .5, preserve/report that diagnostic
+failure and halt seed expansion to inspect training before spending further budget.
+This is an exploration health rule, not a rule for selecting successful seeds in
+a final comparison. Successful controls still require independent confirmation.
+
+Prepare a second task-guided optimizer baseline: active-set implicit weighted
+Glasso derivatives. The local derivative retains free diagonals and uses the
+upper-triangle penalty convention. Numerical adjoint convergence and a fresh
+SPD/KKT-certified solve are required before using a direction. This is gradient
+optimization rather than GRPO and supplies no confidence intervals or bootstrap
+stability evidence. Candidate/selection settings must be recorded before launch.
+General background on differentiating through convex programs: Agrawal et al.
+(2019), https://papers.neurips.cc/paper_files/paper/2019/hash/9ce3c52fc54362e22053399d3181c638-Abstract.html.
+The active-set Glasso adjoint here is a project-specific derivation, checked by
+finite differences; it is not a reproduction of that paper's software.
