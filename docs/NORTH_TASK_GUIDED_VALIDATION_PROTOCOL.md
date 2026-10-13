@@ -106,3 +106,18 @@ contractions, then recheck full NLL/complexity and training AP; reject to the in
 graph when these fail. No validation selection or test access. Compare final
 methods with the strongest matched text/concept/fixed-graph controls. This is a
 bounded gradient-versus-search test, not a GRPO advantage or global optimum claim.
+### Frozen-feature readout diagnosis, 2026-10-13
+
+After the stabilized seed-11 controls recovered graph/concept training but the
+text arm remained unhealthy, do not expand or filter those failed controls into
+a multi-seed efficacy claim. Independently fit fresh FP32 linear heads to the
+already cached mean text features of both the original trained backbone and the
+unadapted base backbone. Use all 4563 training records, seeds 11/17/23, 300 Adam
+steps at .01, training-only feature normalization, and the same .001 mean-squared
+weight penalty. Report uniform BCE (primary) and square-root positive weighting
+(secondary), every seed, and training metrics for the original/data0 sources.
+No selection by validation and no test access. The original frozen backbone was
+trained with graph, so its readouts do not establish independent text-only
+training performance or graph efficacy. This check isolates readout stability
+and the attainable performance of the cached representations.
+
