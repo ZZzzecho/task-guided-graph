@@ -63,7 +63,7 @@ class WeightedGraphicalLasso:
         self.solve_calls = 0
 
     def solve(self, S, penalty, initial_theta=None, progress_callback=None, progress_every=25, label="glasso",
-              diagnostic_callback=None, diagnostic_every=250):
+              diagnostic_callback=None, diagnostic_every=250, reconstruct_dual=True):
         s = symmetric_matrix(S, "S")
         p = s.shape[0]
         if np.linalg.eigvalsh(s)[0] < -1e-10 or np.any(np.diag(s) <= 0):
@@ -78,6 +78,26 @@ class WeightedGraphicalLasso:
         u = np.zeros_like(z)
         c = self.config
         kkt = mineig = obj = None
+        if initial_theta is not None and reconstruct_dual:
+            # Stationarity gives rho*u = Theta^{-1}-S. Reusing only Theta
+            # with u=0 destroys this relation even for an unchanged problem.
+            inverse = np.linalg.inv(z)
+            u = (inverse - s) / c.rho
+            active = z != 0
+            residual = np.maximum(np.abs(s - inverse) - lam / 2, 0)
+            residual[active] = np.abs((s - inverse)[active] +
+                                      (lam / 2)[active] * np.sign(z[active]))
+            initial_kkt = float(np.max(residual))
+            if initial_kkt <= c.kkt_tol and diagnostic_callback is None:
+                mineig = float(np.linalg.eigvalsh(z)[0])
+                if mineig > 0:
+                    if progress_callback is not None:
+                        progress_callback({"stage": label, "iteration": 0,
+                            "dimension": p, "max_iter": c.max_iter,
+                            "reused_kkt_certified_initial": True,
+                            "kkt_residual": initial_kkt})
+                    return SolverResult(readonly(z), True, 0, 0., 0., initial_kkt,
+                                        objective(s, lam, z), mineig, "converged")
         if not isinstance(diagnostic_every, int) or diagnostic_every < 1:
             raise ValueError("diagnostic_every must be a positive integer")
 
