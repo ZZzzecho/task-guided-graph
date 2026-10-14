@@ -232,3 +232,24 @@ text reference and strongest matched no-edge/random controls. This changed
 receiver probes graph usefulness; it does not establish GRPO efficacy or joint
 statistical projection learning. Any exploratory improvement requires a locked
 independent confirmation; retain the AP+.005/F1-.002 target.
+
+### Statistical graph as a task-weight prior, final receiver probe
+
+The conditional-anchor feature receiver again did not improve diagnosis robustly:
+true AP .89262, no-edge .89251 and some random priors better, all below frozen
+text AP .90140. Test a genuinely different graph use, without adding features or
+nonlinear capacity. All arms use the SAME full rank-Gaussian H centered with
+TRAIN means and scaled by sqrt(RP). Fit a zero-initialized, bias-free linear
+correction to the SAME frozen seed text logits. Classifier coefficients are
+regularized by Q=.3I+.7C, C the normalized learned concept precision. Compare
+Q=I (no edges), true Q and five node permutations of C; all Q diagonals equal1,
+random and true Q have the SAME eigenvalues and overall penalty scale.
+
+Objective: full-training macro pairwise ranking temperature1 plus .1 BCE,
+.1 mean-square logit correction, and .01/(2L) sum_label,row w Q w. All4563
+records, 500 full-population Adam steps .003, gradient clip1, same capacity;
+three seed text heads11/17/23. Report all21 outcomes on validation, no selection,
+test closed. Numerical penalty/gradient and permutation-spectrum checks required.
+For a fixed Q this readout objective is convex with SPD quadratic regularization;
+finite optimizer steps do not establish exact convergence, and no global-MNGM or
+GRPO conclusion follows. Keep the original gain/consistency decision targets.
