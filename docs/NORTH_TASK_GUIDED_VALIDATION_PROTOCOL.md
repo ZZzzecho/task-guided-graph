@@ -205,3 +205,30 @@ refit with validation, select a null, or open test. A positive reconstruction or
 density result establishes statistical representation information, not improved
 diagnosis or GRPO effectiveness. Verify densities against a full Kronecker-normal
 oracle and conditional reconstruction against explicit Gaussian conditional means.
+
+### Conditional task-label anchor receiver, 2026-10-14
+
+Held-out representation reconstruction shows a clear statistical graph signal
+(MSE true .2923, five calibrated permutations approximately .7318, diagonal .9749),
+but diagnostic benefit remains unproved. Test a task-specific reader to avoid
+pooling every concept almost uniformly. Embed only the original eight formal
+label names with the SAME frozen Qwen encoder; select top8 cosine prototype
+matches from the pre-existing training vocabulary, never example/validation
+labels. Use the same anchor indices for every graph. Each label receives its
+anchors' mean H and the mean Gaussian conditional prediction of those anchors
+from all OTHER concept columns. Center H with training cell means; random graphs
+permute normalized precision while preserving original precision diagonals/SPD.
+No-edge conditional predictions are zero. Fit each arm's feature mean/std only
+on training, floor 1e-4.
+
+Use the same seed's frozen uniform-BCE text logits. Eight label-specific
+128-to-32 GELU MLPs have zero-initialized output layers, identical parameter counts
+and initialization for no-edge, true graph and five permutation seeds1001..1005.
+Reader seeds11/17/23: 300 full-population Adam steps at .01, gradient clip1,
+macro pairwise logistic ranking temperature1 plus .1 BCE and .1 mean-squared
+logit correction. No task-model LoRA updates, no graph refit, no validation
+selection and no test access. Report ALL21 arm/seed outcomes against the frozen
+text reference and strongest matched no-edge/random controls. This changed
+receiver probes graph usefulness; it does not establish GRPO efficacy or joint
+statistical projection learning. Any exploratory improvement requires a locked
+independent confirmation; retain the AP+.005/F1-.002 target.
