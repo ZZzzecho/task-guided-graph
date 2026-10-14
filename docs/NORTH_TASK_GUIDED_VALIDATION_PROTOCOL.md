@@ -186,3 +186,22 @@ not superior graph quality by itself; random-trained teachers control for generi
 mismatch between the trained representation and a new graph. Matched retraining
 controls, seed variation and untouched-test confirmation remain necessary for
 positive efficacy claims. No validation selection or test access.
+
+### Held-out statistical graph information, 2026-10-14
+
+After the aligned receiver showed almost no diagnostic difference, independently
+evaluate whether the learned graph contains statistical information. Use all777
+validation H matrices, the completed training-ECDF rank caches and training-only
+cell means. Hold the initial MNGM row precision B fixed. Compare initial concept
+precision, a no-edge diagonal fit using training covariance at the same B, and
+five node permutations of normalized precision, rescaled to preserve ORIGINAL
+precision diagonal. These nulls preserve partial edge weights/support size and
+SPD; their normalized precision spectrum and log determinant match the original.
+Compute leave-one-concept-out reconstruction from every other concept in the
+same record, joint Gaussian NLL/cell, and conditional pseudo-NLL/cell. Predicting
+a concept must exclude its own value. Use 1000 paired record bootstrap resamples
+only as descriptive intervals; patient IDs are unavailable. Do not use labels,
+refit with validation, select a null, or open test. A positive reconstruction or
+density result establishes statistical representation information, not improved
+diagnosis or GRPO effectiveness. Verify densities against a full Kronecker-normal
+oracle and conditional reconstruction against explicit Gaussian conditional means.
