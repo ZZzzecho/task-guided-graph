@@ -253,3 +253,10 @@ test closed. Numerical penalty/gradient and permutation-spectrum checks required
 For a fixed Q this readout objective is convex with SPD quadratic regularization;
 finite optimizer steps do not establish exact convergence, and no global-MNGM or
 GRPO conclusion follows. Keep the original gain/consistency decision targets.
+
+Implementation repair: the first graph-prior run failed before its first update
+because a NumPy float64 scalar promoted input features to float64 while the
+classifier was float32. Preserve that output as failed infrastructure, not a
+method result. Enforce FP32 feature tensors and verify an actual Linear forward
+with a NumPy double normalization scalar. Relaunch unchanged scientific settings
+and budget into a new output directory. Other completed experiments are unaffected.

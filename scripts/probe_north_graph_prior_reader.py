@@ -22,6 +22,11 @@ def sparse_prior(theta,mix=.7,device='cuda:0'):
     return torch.sparse_coo_tensor(np.stack([i,j]),q[i,j],q.shape,dtype=torch.float32,device=device,check_invariants=True).coalesce()
 
 
+def normalized_patient_features(array,center,normalizer,device='cuda:0'):
+    values=(np.asarray(array,dtype=np.float32)-np.asarray(center,dtype=np.float32)).reshape(len(array),-1)/float(normalizer)
+    return torch.tensor(values,dtype=torch.float32,device=device)
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ['source','aligned','features','heads','output']:p.add_argument('--'+name,type=Path,required=True)
@@ -41,7 +46,7 @@ def main():
     val=np.load(args.aligned/'val_private_rank_matrices.npy',mmap_mode='r',allow_pickle=False)
     if train.shape!=(4563,64,876) or val.shape!=(777,64,876):raise ValueError('population mismatch')
     center=train.mean(0,dtype=np.float64).astype(np.float32);normalizer=np.sqrt(64*876)
-    h={s:torch.tensor((np.asarray(v,dtype=np.float32)-center).reshape(len(v),-1)/normalizer,device='cuda:0') for s,v in [('train',train),('val',val)]}
+    h={s:normalized_patient_features(v,center,normalizer) for s,v in [('train',train),('val',val)]}
     labels={s:np.asarray([json.loads(l)['labels'] for l in (args.source/'prepared'/f'{s}.jsonl').read_text().splitlines()]) for s in ['train','val']}
     y=torch.tensor(labels['train'],dtype=torch.float64,device='cuda:0')
     text={s:np.load(args.features/f'{s}_private_features.npz',allow_pickle=False)['mean'] for s in ['train','val']}

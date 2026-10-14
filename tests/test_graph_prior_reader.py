@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from scripts.probe_north_graph_prior_reader import graph_prior_penalty,sparse_prior
+from scripts.probe_north_graph_prior_reader import graph_prior_penalty,sparse_prior,normalized_patient_features
 
 
 def test_prior_penalty_and_gradient_match_dense_quadratic_oracle():
@@ -19,3 +19,11 @@ def test_prior_controls_have_same_diagonal_and_permuted_spectrum():
     perm=sparse_prior(a[np.ix_(order,order)],device='cpu').to_dense()
     torch.testing.assert_close(q.diag(),torch.ones(3))
     torch.testing.assert_close(torch.linalg.eigvalsh(q),torch.linalg.eigvalsh(perm))
+
+
+def test_numpy_double_scalar_does_not_promote_classifier_inputs():
+    x=np.arange(12,dtype=np.float32).reshape(2,2,3);center=x.mean(0)
+    h=normalized_patient_features(x,center,np.sqrt(6),device='cpu')
+    assert h.dtype==torch.float32
+    torch.nn.Linear(6,8)(h)
+    np.testing.assert_allclose(h.numpy(),((x-center)/float(np.sqrt(6))).reshape(2,6),rtol=1e-6)
