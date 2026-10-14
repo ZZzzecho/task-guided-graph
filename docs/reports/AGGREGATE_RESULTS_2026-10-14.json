@@ -1,0 +1,103 @@
+{
+  "report_date": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "publication_scope": "Aggregate research metrics only; no patient records, labels, identifiers, predictions, vocabulary, embeddings, graph matrices or weights",
+  "north_protocol": {
+    "training_records": 4563,
+    "validation_records": 777,
+    "concept_count": 876,
+    "label_count": 8,
+    "test_split_touched": false,
+    "validation_reused_for_exploration": true,
+    "patient_independence_confirmed": false,
+    "reader_seeds": [11, 17, 23],
+    "reader_seed_limitation": "Classifier heads on one frozen backbone, not independent end-to-end replications",
+    "predeclared_target": {
+      "macro_AP_gain_over_strongest_matched_control": 0.005,
+      "minimum_macro_F1_change": -0.002,
+      "independent_confirmation_required": true
+    }
+  },
+  "north_original_GRPO": {
+    "runtime_hours": 35.71,
+    "candidate_solve_hours": 27.337,
+    "valid_candidates": 16,
+    "policy_updates": 4,
+    "accepted_graph_updates": 1,
+    "initial_validation": {"macro_AP": 0.8650166532, "macro_F1": 0.6738098341, "BCE": 0.1888427134},
+    "final_validation": {"macro_AP": 0.8647706154, "macro_F1": 0.6708546362, "BCE": 0.1887655824},
+    "conclusion": "No demonstrated diagnostic gain"
+  },
+  "north_implicit_search": {
+    "candidate_families": ["directed", "shuffled_direction", "global_penalty"],
+    "candidates_per_family": 3,
+    "selection_metric": "Training macro AP only; selected penalties undergo complete alternating MNGM and acceptance checks",
+    "all_refined_candidates_accepted": false,
+    "all_refined_candidates_rejected": true,
+    "retained_graph": "initial",
+    "initial_validation": {"macro_AP": 0.870350679, "macro_F1": 0.790198413},
+    "directed_0_3_conditional_graph_change": {
+      "added_edges": 2653,
+      "removed_edges": 5000,
+      "relative_partial_correlation_Frobenius_change": 0.504,
+      "mean_absolute_validation_probability_change": 0.000865919
+    },
+    "statistical_confidence_action_mask_implemented": false
+  },
+  "north_cached_text_heads": {
+    "uniform_BCE": {"macro_AP_mean": 0.901401041, "macro_F1_mean": 0.842946342},
+    "sqrt_positive_weighted_BCE": {"macro_AP_mean": 0.903918060, "macro_F1_mean": 0.845750206},
+    "interpretation": "Readout gain; frozen LoRA was originally trained with graph, so these are not independent pure-text end-to-end baselines"
+  },
+  "north_aligned_H_reader": {
+    "text": {"macro_AP_mean": 0.901400735, "macro_F1_mean": 0.842946342},
+    "no_edges": {"macro_AP_mean": 0.901461623, "macro_F1_mean": 0.843096236},
+    "true_graph": {"macro_AP_mean": 0.901410898, "macro_F1_mean": 0.843096236},
+    "permuted_graph": {"macro_AP_mean": 0.901414028, "macro_F1_mean": 0.843096236}
+  },
+  "north_conditional_anchor_reader": {
+    "completed_fits": 21,
+    "no_edges": {"macro_AP_mean": 0.892514581, "macro_F1_mean": 0.835488388},
+    "true_graph": {"macro_AP_mean": 0.892616881, "macro_F1_mean": 0.839751051},
+    "highest_random_AP_arm_reported_without_selection": {"macro_AP_mean": 0.897385561, "macro_F1_mean": 0.844725653}
+  },
+  "north_statistical_graph_quality": {
+    "comparison": "Predict each concept representation from other concepts; train-only projection, rank transform and means; fixed row precision and five matched random graphs",
+    "true_graph": {"reconstruction_MSE": 0.292312128, "joint_NLL_per_cell": 0.989806073},
+    "no_edges": {"reconstruction_MSE": 0.974880896, "joint_NLL_per_cell": 1.404701108},
+    "random_graph_mean": {"reconstruction_MSE": 0.731787992, "joint_NLL_per_cell": 1.252527523},
+    "interpretation": "Useful statistical dependencies between encoded representations; does not establish diagnostic, causal or GRPO benefit"
+  },
+  "north_graph_coefficient_prior": {
+    "completed_fits": 21,
+    "optimization": "Ordinary gradient optimization, not GRPO",
+    "diagonal_prior": {"macro_AP_mean": 0.9027266753611186, "macro_F1_mean": 0.8498875858753295},
+    "true_graph_prior": {"macro_AP_mean": 0.9033218496599438, "macro_F1_mean": 0.8526290200891852},
+    "random_priors": [
+      {"macro_AP_mean": 0.9029380579928855, "macro_F1_mean": 0.8512291255174205},
+      {"macro_AP_mean": 0.9029592402437308, "macro_F1_mean": 0.8512291255174205},
+      {"macro_AP_mean": 0.9029627593825342, "macro_F1_mean": 0.8512291255174205},
+      {"macro_AP_mean": 0.9029578340970098, "macro_F1_mean": 0.8512291255174205},
+      {"macro_AP_mean": 0.9029595661949815, "macro_F1_mean": 0.8512291255174205}
+    ],
+    "paired_record_bootstrap": {
+      "draws": 1000,
+      "description": "Paired RECORD bootstrap, averaging metrics over three fixed heads; descriptive intervals, not patient-level or independent test confirmation",
+      "true_minus_diagonal": {
+        "macro_AP": {"delta": 0.0005951742988251629, "descriptive_95_interval": [-0.00013154840869979145, 0.0013109202752590587]},
+        "macro_F1": {"delta": 0.0027414342138556425, "descriptive_95_interval": [-0.00028369726685729675, 0.007337762265084834]}
+      },
+      "true_minus_random_mean": {
+        "macro_AP": {"delta": 0.00036635807771545625, "descriptive_95_interval": [-0.00013460055568965124, 0.0009500174141706701]},
+        "macro_F1": {"delta": 0.0013998945717647038, "descriptive_95_interval": [-0.00009819487622376998, 0.003807501359308582]}
+      }
+    },
+    "conclusion": "Small nominal positive differences; all reported matched difference intervals cross zero; does not meet predeclared target"
+  },
+  "research_decision": {
+    "expand_GRPO_training": false,
+    "retain_GRPO_as_secondary_comparator": true,
+    "diagnostic_task_guided_efficacy_confirmed": false,
+    "statistical_representation_graph_utility_observed": true
+  }
+}
