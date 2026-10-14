@@ -63,7 +63,8 @@ class WeightedGraphicalLasso:
         self.solve_calls = 0
 
     def solve(self, S, penalty, initial_theta=None, progress_callback=None, progress_every=25, label="glasso",
-              diagnostic_callback=None, diagnostic_every=250):
+              diagnostic_callback=None, diagnostic_every=250, reconstruct_dual=True,
+              adaptive_rho=False):
         s = symmetric_matrix(S, "S")
         p = s.shape[0]
         if np.linalg.eigvalsh(s)[0] < -1e-10 or np.any(np.diag(s) <= 0):
@@ -77,7 +78,28 @@ class WeightedGraphicalLasso:
         self.solve_calls += 1
         u = np.zeros_like(z)
         c = self.config
+        rho = c.rho
         kkt = mineig = obj = None
+        if initial_theta is not None and reconstruct_dual:
+            # Stationarity gives rho*u = Theta^{-1}-S. Reusing only Theta
+            # with u=0 destroys this relation even for an unchanged problem.
+            inverse = np.linalg.inv(z)
+            u = (inverse - s) / c.rho
+            active = z != 0
+            residual = np.maximum(np.abs(s - inverse) - lam / 2, 0)
+            residual[active] = np.abs((s - inverse)[active] +
+                                      (lam / 2)[active] * np.sign(z[active]))
+            initial_kkt = float(np.max(residual))
+            if initial_kkt <= c.kkt_tol and diagnostic_callback is None:
+                mineig = float(np.linalg.eigvalsh(z)[0])
+                if mineig > 0:
+                    if progress_callback is not None:
+                        progress_callback({"stage": label, "iteration": 0,
+                            "dimension": p, "max_iter": c.max_iter,
+                            "reused_kkt_certified_initial": True,
+                            "kkt_residual": initial_kkt})
+                    return SolverResult(readonly(z), True, 0, 0., 0., initial_kkt,
+                                        objective(s, lam, z), mineig, "converged")
         if not isinstance(diagnostic_every, int) or diagnostic_every < 1:
             raise ValueError("diagnostic_every must be a positive integer")
 
@@ -100,24 +122,24 @@ class WeightedGraphicalLasso:
         if diagnostic_callback is not None:
             emit_diagnostics(0, z, None, None, None, None)
         for iteration in range(1, c.max_iter + 1):
-            eigen, q = np.linalg.eigh(c.rho * (z - u) - s)
-            root = np.sqrt(eigen * eigen + 4 * c.rho)
+            eigen, q = np.linalg.eigh(rho * (z - u) - s)
+            root = np.sqrt(eigen * eigen + 4 * rho)
             # Stable quadratic root for large negative eigenvalues.
             values = np.empty_like(eigen)
             positive = eigen >= 0
-            values[positive] = (eigen[positive] + root[positive]) / (2 * c.rho)
+            values[positive] = (eigen[positive] + root[positive]) / (2 * rho)
             values[~positive] = 2 / (root[~positive] - eigen[~positive])
             x = (q * values) @ q.T
             x = (x + x.T) / 2
             previous_z = z
             v = x + u
-            z = np.sign(v) * np.maximum(np.abs(v) - lam / (2 * c.rho), 0)
+            z = np.sign(v) * np.maximum(np.abs(v) - lam / (2 * rho), 0)
             z = (z + z.T) / 2
             u += x - z
             primal = float(np.linalg.norm(x - z, "fro"))
-            dual = float(c.rho * np.linalg.norm(z - previous_z, "fro"))
+            dual = float(rho * np.linalg.norm(z - previous_z, "fro"))
             eps_primal = p * c.abs_tol + c.rel_tol * max(np.linalg.norm(x), np.linalg.norm(z))
-            eps_dual = p * c.abs_tol + c.rel_tol * np.linalg.norm(c.rho * u)
+            eps_dual = p * c.abs_tol + c.rel_tol * np.linalg.norm(rho * u)
             sampled = diagnostic_callback is not None and (
                 iteration == 1 or iteration % diagnostic_every == 0 or iteration == c.max_iter)
             if sampled:
@@ -134,6 +156,7 @@ class WeightedGraphicalLasso:
                     "dual": dual,
                     "eps_primal": float(eps_primal),
                     "eps_dual": float(eps_dual),
+                    "rho": float(rho),
                 })
             if primal <= eps_primal and dual <= eps_dual:
                 mineig = float(np.linalg.eigvalsh(z)[0])
@@ -145,6 +168,16 @@ class WeightedGraphicalLasso:
                             emit_diagnostics(iteration, x, primal, dual, eps_primal, eps_dual)
                         return SolverResult(readonly(z), True, iteration, primal, dual,
                                             kkt, obj, mineig, "converged")
+            # Boyd et al. (2011), sec. 3.4.1: rescale the scaled dual whenever
+            # rho changes. Stop adapting after a finite prefix, preserving the
+            # fixed-rho tail and the original residual/SPD/KKT publication checks.
+            if adaptive_rho and iteration <= 1000 and iteration % 25 == 0:
+                next_rho = rho
+                if primal > 10 * dual: next_rho = min(rho * 2, 1e4)
+                elif dual > 10 * primal: next_rho = max(rho / 2, 1e-4)
+                if next_rho != rho:
+                    u *= rho / next_rho
+                    rho = next_rho
         # Never publish an unconverged matrix as an optimized graph.
         return SolverResult(None, False, iteration, primal, dual, kkt, obj, mineig,
                             "max_iter reached before residual/SPD/KKT checks passed")
